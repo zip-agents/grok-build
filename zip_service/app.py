@@ -7,9 +7,11 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, Response
 from starlette.routing import Route
@@ -17,9 +19,11 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from zip_service.api.endpoint import ZipEndpoint
 from zip_service.api.gate import Gate
+from zip_service.api.openapi import install_openapi
 from zip_service.api.problems import problem_response
 from zip_service.config import Settings, load_settings
 from zip_service.documents import (
+    OPENAPI_PATH,
     Catalog,
     Document,
     document_response,
@@ -35,6 +39,55 @@ _HTTP_CODES = {
     404: "not-found",
     405: "method-not-allowed",
 }
+
+_OPENAPI_TAGS = [
+    {"name": "health", "description": "Process probes. They do not take a concurrency slot."},
+    {"name": "docs", "description": "Markdown and the manifest fetched by the docs portal."},
+    {"name": "zip", "description": "Streaming ZIP uploads, as this process implements them."},
+]
+
+_MARKDOWN_HEADERS = {
+    "Cache-Control": {
+        "description": "Always no-cache.",
+        "schema": {"type": "string", "const": "no-cache"},
+    },
+    "X-Content-Type-Options": {
+        "schema": {"type": "string", "const": "nosniff"},
+    },
+}
+
+
+class MarkdownResponse(Response):
+    """Media type used only so OpenAPI describes the baked markdown."""
+
+    media_type = "text/markdown"
+
+
+class HealthOk(BaseModel):
+    status: Literal["ok"]
+
+
+class HealthReady(BaseModel):
+    status: Literal["ready"]
+
+
+class HealthShuttingDown(BaseModel):
+    status: Literal["shutting-down"]
+
+
+class ManifestDocument(BaseModel):
+    slug: str
+    title: str
+    path: str
+
+
+class DocsManifest(BaseModel):
+    service: str
+    version: str
+    revision: str
+    contract_version: str
+    documents: list[ManifestDocument]
+    openapi: str
 
 
 def create_app(settings: Settings | None = None, *, docs_root: Path | None = None) -> FastAPI:
@@ -55,21 +108,48 @@ def create_app(settings: Settings | None = None, *, docs_root: Path | None = Non
     app = FastAPI(
         title="zip-service",
         version=catalog.version,
+        description=(
+            "Streaming multipart-to-ZIP API as this process implements it. "
+            "No servers and no security: the gateway adds those."
+        ),
         docs_url=None,
         redoc_url=None,
-        openapi_url=None,
+        openapi_url=OPENAPI_PATH,
+        root_path_in_servers=False,
+        openapi_tags=_OPENAPI_TAGS,
         redirect_slashes=False,
         lifespan=lifespan,
     )
     app.state.settings = resolved
     app.state.gate = gate
 
-    @app.get("/health/live")
+    @app.get(
+        "/health/live",
+        tags=["health"],
+        summary="Liveness",
+        response_model=HealthOk,
+    )
     async def live() -> JSONResponse:
+        """The process is running."""
         return JSONResponse({"status": "ok"})
 
-    @app.get("/health/ready")
+    @app.get(
+        "/health/ready",
+        tags=["health"],
+        summary="Readiness",
+        response_model=HealthReady,
+        responses={
+            503: {
+                "model": HealthShuttingDown,
+                "description": (
+                    "The process is shutting down. The body is "
+                    '{"status": "shutting-down"}, not a problem document.'
+                ),
+            }
+        },
+    )
     async def ready(request: Request) -> JSONResponse:
+        """The process can accept new zip requests."""
         if request.app.state.gate.shutting_down:
             return JSONResponse({"status": "shutting-down"}, status_code=503)
         return JSONResponse({"status": "ready"})
@@ -88,14 +168,22 @@ def create_app(settings: Settings | None = None, *, docs_root: Path | None = Non
     app.add_exception_handler(HTTPException, _http_exception)
     app.add_exception_handler(Exception, _unhandled)
     app.add_middleware(RequestIdMiddleware)
+    install_openapi(app, resolved)
     return app
 
 
 def _register_docs(app: FastAPI, catalog: Catalog) -> None:
     """Register the manifest and each allow-listed document. No path parameters."""
 
-    @app.get("/docs/manifest.json", include_in_schema=False)
+    @app.get(
+        "/docs/manifest.json",
+        tags=["docs"],
+        summary="Documentation manifest",
+        response_model=DocsManifest,
+        include_in_schema=True,
+    )
     async def docs_manifest() -> JSONResponse:
+        """Baked markdown paths and the OpenAPI document for this process."""
         return manifest_response(catalog)
 
     for document in catalog.documents:
@@ -104,10 +192,20 @@ def _register_docs(app: FastAPI, catalog: Catalog) -> None:
 
 def _register_document(app: FastAPI, document: Document) -> None:
     async def serve() -> FileResponse:
+        """Markdown copied into the image at build time."""
         return document_response(document)
 
     serve.__name__ = "docs_" + document.slug
-    app.add_api_route(document.url_path, serve, methods=["GET"], include_in_schema=False)
+    app.add_api_route(
+        document.url_path,
+        serve,
+        methods=["GET"],
+        include_in_schema=True,
+        tags=["docs"],
+        summary=document.title,
+        response_class=MarkdownResponse,
+        responses={200: {"headers": _MARKDOWN_HEADERS}},
+    )
 
 
 def _request_id(request: Request) -> str:

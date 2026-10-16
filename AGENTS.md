@@ -1,6 +1,6 @@
 # Agents and engineers
 
-This file is the working agreement for changes to zip-service. The contract in the task document (version 1.1.0) is the behavioural spec. The README explains the choices made where that contract is silent. Do not edit the exercise PDF.
+This file is the working agreement for changes to zip-service. The contract in the task document (version 1.1.0, including the OpenAPI section) is the behavioural spec. The service version is 1.2.0. The README explains the choices made where that contract is silent. Do not edit the exercise PDF.
 
 This is an HTTP API. There is no command-line tool and no installable library. The process entry is `python -m zip_service`.
 
@@ -32,7 +32,7 @@ Docker. Every `make` target below runs inside an image built from this repo. The
 
 `zip_service/__main__.py` loads settings, installs `SIGTERM` and `SIGINT`, and runs uvicorn's `_serve` so uvicorn does not replace those handlers. It is not a CLI.
 
-`zip_service/app.py` builds the FastAPI app, routes health checks, serves the baked markdown under `/docs`, and turns framework `404` and `405` into problem JSON. `POST /api/v1/zip` is a raw ASGI endpoint in `zip_service/api/endpoint.py`. OpenAPI, Swagger, and ReDoc stay off.
+`zip_service/app.py` builds the FastAPI app, routes health checks, serves the baked markdown under `/docs`, and turns framework `404` and `405` into problem JSON. `POST /api/v1/zip` is a raw ASGI endpoint in `zip_service/api/endpoint.py` and stays a plain Starlette `Route`. `zip_service/api/openapi.py` describes that route for `GET /docs/openapi.json`. Swagger UI and ReDoc stay off, and nothing is served at `/openapi.json`.
 
 One request has three pieces:
 
@@ -48,7 +48,7 @@ One request has three pieces:
 | `zip_service/app.py` | Application, health, docs, `404` and `405` |
 | `zip_service/documents.py` | Fixed docs allow-list and manifest |
 | `zip_service/config.py` | Environment variables and `.env` |
-| `zip_service/api/` | Zip route, multipart parser, limits, problem JSON |
+| `zip_service/api/` | Zip route, multipart parser, limits, problem JSON, OpenAPI operation |
 | `zip_service/archive/` | Archive names, `Content-Disposition`, streaming ZIP |
 | `zip_service/runtime/` | Output buffer, fixed byte caps, JSON logs |
 
@@ -70,6 +70,7 @@ These are not style preferences. Breaking one of them fails the contract or dead
 | Run deflate off the event loop. | Health checks and other requests must stay responsive. |
 | Health checks and documentation routes do not take a concurrency slot, and a zip request over the limit is rejected immediately. | `503 overloaded` is not a queue. |
 | Serve documentation from the allow-list built at startup. | A request path is never joined onto a filesystem path. The handler can read only the files baked into the image. |
+| Keep `POST /api/v1/zip` as a plain Starlette `Route` to `ZipEndpoint`. | FastAPI would wrap the upload. Describe the route in `zip_service/api/openapi.py` instead. |
 | Always release the slot, including on disconnect, cancel, and error. | A leaked slot permanently reduces capacity. |
 | Stdout is JSON lines only. Configuration and documentation errors go to stderr. | Log shippers parse every stdout line. |
 | Real environment variables override `.env`. Do not bake `.env` into the image. | The contract's precedence rule, and secrets must not be in the image. |
@@ -92,7 +93,8 @@ A change that only passes an in-process ASGI client is not done. The integration
 - Comments explain a constraint that the code cannot show on its own, such as why `force_zip64` is set before the size is known. Do not restate the contract in comments.
 - New settings belong in `zip_service/config.py`, `.env.example`, and the README. Invalid configuration exits 2 with the variable name on stderr. A baked document that is missing or larger than 1 MiB exits 2 with `documentation error` on stderr.
 - `README.md` and `AGENTS.md` are served at `/docs`. The portal renders CommonMark, GitHub-style tables, and strikethrough, and it shows raw HTML as text. Name the other document in prose. Do not add a relative link, raw HTML, or a diagram the portal would have to render.
-- Problem codes and statuses live in `zip_service/api/problems.py`. Add a code in one place so the abort status and the HTTP status cannot drift.
+- Problem codes and statuses live in `zip_service/api/problems.py`. Add a code in one place so the abort status and the HTTP status cannot drift. Zip problem examples in the OpenAPI document are built from `problem_body`.
+- A new HTTP route is a FastAPI route with a tag, a summary, and a response model for the body it actually returns. Do not leave FastAPI's automatic `422` on a route that never sends one. `POST /api/v1/zip` is the exception: it stays a Starlette `Route`, and its operation is added in `zip_service/api/openapi.py`.
 - Integration tests use `tests/integration/http_util.py` and a real subprocess from `server_proc.py` (`python -m zip_service` with `PYTHONPATH` set to the repo root). Do not add httpx for these tests. Leave `[tool.coverage.run] patch = ["subprocess"]` in place so that process is measured. Do not strip `COVERAGE_FILE` or `COVERAGE_PROCESS_START` from its environment.
 - Mark a test `slow` only when it moves tens of megabytes or waits on a real timeout. Idle timeouts in tests should be about 1 second.
 - `ZIP_SERVICE_TEST_HOOKS` is the only test seam. Do not add a backdoor that is on by default.

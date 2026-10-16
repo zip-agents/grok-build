@@ -23,11 +23,13 @@ def test_manifest_lists_readme_then_agents(monkeypatch: pytest.MonkeyPatch) -> N
         "revision",
         "contract_version",
         "documents",
+        "openapi",
     ]
     assert manifest["service"] == "zip-service"
-    assert manifest["version"] == "1.1.0"
+    assert manifest["version"] == "1.2.0"
     assert manifest["revision"] == "3f2c9e1"
     assert manifest["contract_version"] == "1.1.0"
+    assert manifest["openapi"] == "/docs/openapi.json"
     documents = manifest["documents"]
     assert isinstance(documents, list)
     assert documents == [

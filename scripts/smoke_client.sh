@@ -36,8 +36,10 @@ doc = json.load(open(sys.argv[1], encoding="utf-8"))
 expected = sys.argv[2]
 if doc["service"] != "zip-service" or doc["contract_version"] != "1.1.0":
     raise SystemExit(f"unexpected manifest: {doc}")
-if doc["version"] != "1.1.0" or doc["revision"] != expected:
+if doc["version"] != "1.2.0" or doc["revision"] != expected:
     raise SystemExit(f"revision {doc['revision']!r} != {expected!r}")
+if doc.get("openapi") != "/docs/openapi.json":
+    raise SystemExit(f"unexpected openapi path: {doc.get('openapi')!r}")
 slugs = [item["slug"] for item in doc["documents"]]
 if slugs[:2] != ["readme", "agents"]:
     raise SystemExit(f"unexpected documents: {slugs}")
@@ -55,6 +57,22 @@ while IFS= read -r doc_path; do
     name=${doc_path#/docs/}
     cmp "${tmpdir}/doc.md" "/app/${name}"
 done < "${tmpdir}/paths.txt"
+
+curl -fsS -D "${tmpdir}/openapi.headers" -o "${tmpdir}/openapi.json" \
+    "${base}/docs/openapi.json"
+grep -i '^content-type: application/json' "${tmpdir}/openapi.headers"
+python - "$tmpdir/openapi.json" <<'PY'
+import json
+import sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+if "/api/v1/zip" not in doc.get("paths", {}):
+    raise SystemExit("openapi document has no /api/v1/zip")
+if "servers" in doc or "security" in doc:
+    raise SystemExit("openapi document must not declare servers or security")
+if len(json.dumps(doc).encode()) > 1024 * 1024:
+    raise SystemExit("openapi document exceeds 1 MiB")
+PY
 
 printf 'hello\n' > "${tmpdir}/a.txt"
 curl -fsS -D "${tmpdir}/headers.txt" -o "${tmpdir}/out.zip" \

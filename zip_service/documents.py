@@ -20,6 +20,7 @@ _MAX_BYTES = 1024 * 1024
 _MAX_DOCUMENTS = 20
 _SERVICE = "zip-service"
 _CONTRACT_VERSION = "1.1.0"
+OPENAPI_PATH = "/docs/openapi.json"
 
 # Slug, title, filename. Order is the manifest order.
 _CATALOG = (
@@ -55,6 +56,7 @@ class Catalog:
                 {"slug": item.slug, "title": item.title, "path": item.url_path}
                 for item in self.documents
             ],
+            "openapi": OPENAPI_PATH,
         }
 
 

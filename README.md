@@ -2,7 +2,7 @@
 
 HTTP service that accepts a `multipart/form-data` upload and streams back a ZIP archive. Upload bytes are not written to disk, and memory per request is bounded by configuration rather than by the size of the upload.
 
-The behaviour is specified by the contract in the task document (version 1.1.0). This README records how to run the service and the choices made where that contract is silent. The running image serves this file and the AGENTS document for the docs portal. See Documentation below.
+The behaviour is specified by the contract in the task document (version 1.1.0, including the OpenAPI section). The service version is 1.2.0. This README records how to run the service and the choices made where that contract is silent. The running image serves this file and the AGENTS document for the docs portal. See Documentation below.
 
 ## Run
 
@@ -33,7 +33,7 @@ This is an HTTP API. The package is `zip_service`, and `python -m zip_service` i
 | `zip_service/app.py` | FastAPI application, health routes, docs routes, `404` and `405` |
 | `zip_service/documents.py` | Fixed docs allow-list and manifest |
 | `zip_service/config.py` | Environment variables and `.env` |
-| `zip_service/api/` | `POST /api/v1/zip`, multipart parser, limits, problem JSON |
+| `zip_service/api/` | `POST /api/v1/zip`, multipart parser, limits, problem JSON, OpenAPI operation |
 | `zip_service/archive/` | Archive names, `Content-Disposition`, streaming ZIP |
 | `zip_service/runtime/` | Output buffer, fixed byte caps, JSON logs |
 
@@ -141,7 +141,7 @@ The image is one process on purpose. Extra workers would each enforce `MAX_CONCU
 
 ## Documentation
 
-An API gateway hosts the authenticated docs portal. It fetches this service's markdown from the running container over the private network and renders it, so the portal matches the deployed build. The markdown is the only input. FastAPI's Swagger, ReDoc, and `/openapi.json` stay off. The gateway hosts the API reference.
+An API gateway hosts the authenticated docs portal. It fetches this service's markdown and OpenAPI document from the running container over the private network, so the portal matches the deployed build. Swagger UI and ReDoc stay off, and nothing is served at `/openapi.json`. The gateway renders `GET /docs/openapi.json`.
 
 `GET /docs/manifest.json` returns JSON:
 
@@ -152,12 +152,28 @@ An API gateway hosts the authenticated docs portal. It fetches this service's ma
 | `revision` | The `GIT_SHA` environment variable set at build time. `unknown` when it is unset or empty |
 | `contract_version` | `1.1.0` |
 | `documents` | `readme` at `/docs/README.md`, then `agents` at `/docs/AGENTS.md` |
+| `openapi` | `/docs/openapi.json` |
 
 `GET /docs/README.md` and `GET /docs/AGENTS.md` return those files with `Content-Type: text/markdown; charset=utf-8`, `Cache-Control: no-cache`, and `X-Content-Type-Options: nosniff`. Any other name is `404 not-found`, the same problem document as any other unknown path.
 
 The files are copied into the image at build time. Each must be at most 1 MiB. The process builds the allow-list once at startup and serves those paths only. A request path is never joined onto a filesystem path. These routes are outside `/api/v1`, do not take a concurrency slot, and do not require authentication.
 
 The portal renders CommonMark, GitHub-style tables, and strikethrough. It shows raw HTML as text, and it shows diagram blocks as plain code. A relative link to another document does not resolve there, so this file names the AGENTS document in prose. `FileResponse` may answer a `Range` request with `206`.
+
+### OpenAPI
+
+`GET /docs/openapi.json` is an OpenAPI 3.1 document for this process. The manifest field `openapi` points at it. The document describes the service as reached directly: it has no `servers` and no `security`. The gateway adds its own server URL, its API key, its own errors, and a curl sample per operation. It also compares this document with the contract and lists every difference, so the document records what this build does.
+
+FastAPI generates the health and documentation routes from their tags, summaries, and response models. `POST /api/v1/zip` is a plain Starlette route, so FastAPI does not see it. `zip_service/api/openapi.py` writes that operation, and `app.openapi()` inserts it into the generated document and caches the result. Problem examples are produced by `problem_body`, which is the same function that writes the response, so the title, detail, and status cannot drift. The `Problem` schema and the `X-Request-ID` header are shared components. Every `$ref` is local (`#/components/...`). Building the document does not use the network. Swagger UI and ReDoc stay off, and nothing is served at `/openapi.json`.
+
+The zip operation's `files.maxItems` is this process's `MAX_FILES`. The `filename` property's `maxLength` is 1024, the raw-byte cap on that form field. The archive-name rules are stricter than that cap (controls, slashes, UTF-8, 255 bytes) and are described on the property; a name that fails them is `422 invalid-archive-name` before any file is streamed.
+
+Codes left out of the zip operation:
+
+- `not-found` and `method-not-allowed` are unknown paths and methods, not zip responses.
+- `too-many-files` (`413`) is not an HTTP response on this route. `MAX_FILES` is at least 1, and the status line is sent with the first non-skipped file, so a later file over the limit aborts the connection. The `413` problem body exists for a caller that hits the limit before streaming. That caller is not reachable through `POST /api/v1/zip`.
+
+Health `503` is `{"status": "shutting-down"}`. The zip `503` is a problem document. `Retry-After` is sent only for `overloaded`. Document routes are described as `text/markdown`. A `Range` request can still return `206`; the schema describes the whole file.
 
 ## Continuous integration
 
@@ -166,7 +182,7 @@ The portal renders CommonMark, GitHub-style tables, and strikethrough. It shows 
 | Job | Purpose |
 |---|---|
 | `check` | `make check`. Builds the dev image and runs ruff, mypy, and both test suites inside it, including `unzip` and `7z`. The code under test is the code copied into the image. New `zip_service` lines with no coverage are annotations on the diff. They do not fail the job. |
-| `image` | `make image-smoke` with `GIT_SHA` set to the checked-out commit. Builds the runtime image and checks health, the docs manifest, and one archive through a second container. This is the image that serves traffic: non-root, read-only, no test tools. |
+| `image` | `make image-smoke` with `GIT_SHA` set to the checked-out commit. Builds the runtime image and checks health, the docs manifest, `/docs/openapi.json`, and one archive through a second container. This is the image that serves traffic: non-root, read-only, no test tools. |
 
 The jobs run in parallel. A broken dev image does not hide a broken runtime image. `actions/checkout` is pinned to v7.0.1. The image installs uv 0.13.1, which is the version that produced `uv.lock`.
 
@@ -256,7 +272,7 @@ In-flight requests may finish until `SHUTDOWN_GRACE_SECONDS`. The process then c
 ## Choices where the contract is silent
 
 - **Problem text.** `no-files` uses the title and detail from the contract example. Every other problem uses the title and detail in `zip_service/api/problems.py`. Clients should match on `code`. Bodies are compact JSON with keys in the order `type`, `title`, `status`, `detail`, `code`, `request_id`.
-- **`413` before streaming.** Streaming starts when the first non-skipped file is accepted, so with `MAX_FILES >= 1` the count cannot exceed the limit before the status line. `413 too-many-files` is still the code logged when a later file trips the limit, and the connection is aborted. The `413` problem body is implemented and unit-tested for a caller that hits it before streaming.
+- **`413` before streaming.** Streaming starts when the first non-skipped file is accepted, so with `MAX_FILES >= 1` the count cannot exceed the limit before the status line. `413 too-many-files` is still the code logged when a later file trips the limit, and the connection is aborted. The `413` problem body is implemented and unit-tested for a caller that hits it before streaming. The OpenAPI document omits it for that reason. See OpenAPI above.
 - **Zip64 end record.** See the tools section above.
 - **Entry names after de-duplication** are not truncated again. `report (1).txt` can exceed 255 bytes. The contract's 255-byte rule applies before the ` (n)` suffix.
 - **De-duplication** uses `str.casefold()` and keeps the new name's original case. `ß` and `ss` collide.
@@ -269,7 +285,7 @@ In-flight requests may finish until `SHUTDOWN_GRACE_SECONDS`. The process then c
 - **Multipart framing** is strict CRLF. The boundary is 1–70 RFC 2046 `bchars`, including space. The last `boundary` parameter on `Content-Type` wins. The first `Content-Disposition` wins. Folded header lines are joined. No `Content-Transfer-Encoding` decoding.
 - **Preamble and part headers** over 64 KiB are a malformed body.
 - **Timestamps** are the request's arrival time in UTC, stored in the DOS fields, rounded down to an even second. External attributes are `0o644 << 16`.
-- **HTTP surface.** HTTP/1.1 only. `Date` and `Server` are omitted. `proxy_headers` is off. No `Content-Length` on a zip response. Error responses, including framework `404` and `405`, are `application/problem+json` with `Connection: close`. `405` keeps `Allow`. OpenAPI, Swagger, and ReDoc are off, and slash redirects are off, so an unknown path or a trailing slash is `404`. The baked markdown listed by `GET /docs/manifest.json` is the documentation surface. See Documentation. Health `503` is `{"status":"shutting-down"}`, not a problem document. Success responses may stay keep-alive.
+- **HTTP surface.** HTTP/1.1 only. `Date` and `Server` are omitted. `proxy_headers` is off. No `Content-Length` on a zip response. Error responses, including framework `404` and `405`, are `application/problem+json` with `Connection: close`. `405` keeps `Allow`. Swagger UI and ReDoc are off, and nothing is served at `/openapi.json`. The OpenAPI document is `GET /docs/openapi.json`. Slash redirects are off, so an unknown path or a trailing slash is `404`. The baked markdown listed by `GET /docs/manifest.json` is the documentation surface. See Documentation. Health `503` is `{"status":"shutting-down"}`, not a problem document. Success responses may stay keep-alive.
 - **Request id.** The first `X-Request-ID` that matches `^[A-Za-z0-9._-]{1,128}$` is used, with no trimming. Otherwise a UUIDv4. It is stored on the ASGI scope so `404` and `405` still echo it.
 - **Logs.** JSON lines on stdout only. Configuration errors go to stderr and the process exits 2. A missing, oversized, or invalid baked document does the same, with `documentation error` on stderr. Each zip request emits one line, message `zip request finished`. `duration_ms` is rounded to an integer. `bytes_in` is request body bytes. `bytes_out` is response body bytes, not headers and not the terminating chunk. `files_count` counts non-skipped file parts that started, including a partial one. `code` is omitted when `outcome` is `completed`.
 - **Outcomes.** A full HTTP error before streaming is `rejected`. A cut stream is `aborted`, and `status` is the status that would have been sent. A client disconnect before any status is `client_disconnected` with `status` 0 and `code` `client-disconnected`. A disconnect after `200` keeps `status` 200. Shutdown of a request that still receives a complete `503` is `rejected`. Cancelling a stream at the end of grace is `aborted` with `503` and `shutting-down`. Levels: completed and shutting-down are `INFO`, client-caused failures are `WARNING`, `internal-error` is `ERROR` (the log may include `error_type`, never the exception text). A field part after streaming has begun logs one `WARNING` and does not add a second completion line. `404` and `405` log `request rejected` and are not zip completion lines. Health requests are not logged. A successful documentation request is not logged. An unknown document name is an ordinary `404`.
