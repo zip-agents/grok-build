@@ -38,7 +38,7 @@ This is an HTTP API. The package is `zip_service`, and `python -m zip_service` i
 
 ## Tests, lint, and types
 
-`make check` builds the dev image and runs lint, the format check, mypy, the fast tests, and the slow tests inside it. The same steps one at a time:
+`make check` builds the dev image and runs lint, the format check, mypy, and both test suites inside it. The suites record coverage of `zip_service`, including the `python -m zip_service` process the integration tests start. At the end, new lines in `zip_service` that the run did not execute are printed as warnings. The command still exits 0 when those lines exist. In GitHub Actions the same warnings are annotations on the diff. `COVERAGE_DIFF_BASE` chooses the git commit to diff against. CI sets it to the pull-request base, or to the previous commit on a push. The same steps one at a time:
 
 ```bash
 make dev-image
@@ -55,10 +55,10 @@ Those expand to:
 docker build --target dev -t zip-service:check .
 
 docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
-  ruff check zip_service tests
+  ruff check zip_service tests scripts
 
 docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
-  ruff format --check zip_service tests
+  ruff format --check zip_service tests scripts
 
 docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check mypy
 
@@ -69,7 +69,36 @@ docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
   pytest -m slow
 ```
 
-`make format` runs `ruff format` in the dev image with the tree mounted, so it can write files. `make test` is the fast suite followed by the slow suite, after one image build.
+`make format` runs `ruff format` in the dev image with the tree mounted, so it can write files. `make test` is the fast suite followed by the slow suite, after one image build, and then the same coverage warning as `make check`. `make test-fast` and `make test-slow` do not collect coverage.
+
+The coverage steps `make test` runs:
+
+```bash
+mkdir -p .coverage-data
+
+docker run --rm \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --env COVERAGE_FILE=/coverage/.coverage \
+  --volume "$PWD/.coverage-data:/coverage" \
+  zip-service:check \
+  pytest -m "not slow" --cov=zip_service --cov-append --cov-report=
+
+docker run --rm \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --env COVERAGE_FILE=/coverage/.coverage \
+  --volume "$PWD/.coverage-data:/coverage" \
+  zip-service:check \
+  pytest -m slow --cov=zip_service --cov-append \
+    --cov-report=term-missing --cov-report=xml:/coverage/coverage.xml
+
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --env HOME=/tmp \
+  --volume "$PWD:/repo" \
+  --volume "$PWD/.coverage-data:/coverage:ro" \
+  zip-service:check \
+  python /opt/coverage_warn.py --repo /repo --xml /coverage/coverage.xml
+```
 
 Integration tests start a real `python -m zip_service` process inside that container and speak HTTP/1.1 on a socket. `unzip` and `7z` are installed in the dev image. A missing tool fails the test rather than skipping it.
 
@@ -114,7 +143,7 @@ The image is one process on purpose. Extra workers would each enforce `MAX_CONCU
 
 | Job | Purpose |
 |---|---|
-| `check` | `make check`. Builds the dev image and runs ruff, mypy, and both test suites inside it, including `unzip` and `7z`. The code under test is the code copied into the image. |
+| `check` | `make check`. Builds the dev image and runs ruff, mypy, and both test suites inside it, including `unzip` and `7z`. The code under test is the code copied into the image. New `zip_service` lines with no coverage are annotations on the diff. They do not fail the job. |
 | `image` | `make image-smoke`. Builds the runtime image with `docker build .` and checks health plus one archive through a second container. This is the image that serves traffic: non-root, read-only, no test tools. |
 
 The jobs run in parallel. A broken dev image does not hide a broken runtime image. `actions/checkout` is pinned to v7.0.1. The image installs uv 0.13.1, which is the version that produced `uv.lock`.

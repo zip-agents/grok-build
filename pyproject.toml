@@ -13,6 +13,7 @@ dependencies = [
 dev = [
     "mypy>=1.14.0",
     "pytest>=8.3.4",
+    "pytest-cov>=7.0.0",
     "ruff>=0.9.0",
 ]
 
@@ -38,8 +39,22 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B008"]
 
+[tool.coverage.run]
+source = ["zip_service"]
+relative_files = true
+# Integration tests start python -m zip_service in a subprocess.
+patch = ["subprocess"]
+sigterm = true
+
+[tool.coverage.paths]
+source = ["zip_service", "/app/zip_service", "/work/zip_service"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["zip_service"]
+files = ["zip_service", "scripts/coverage_warn.py"]
 warn_unused_ignores = true

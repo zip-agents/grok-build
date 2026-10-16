@@ -21,8 +21,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Lint, types, and tests inside the dev image
+        env:
+          # Pull requests diff against the base commit. Pushes diff against
+          # the previous tip. An empty value compares against origin/main.
+          COVERAGE_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: make check
 
   image:

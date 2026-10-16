@@ -9,6 +9,8 @@
 __pycache__
 *.py[cod]
 .coverage
+.coverage.*
+.coverage-data
 htmlcov
 .env
 link-tmp

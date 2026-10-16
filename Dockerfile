@@ -32,7 +32,7 @@ RUN uv sync --frozen --group dev --no-install-project
 # Lint, typecheck, tests, and the smoke client. Not the image that serves traffic.
 FROM python AS dev
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends unzip p7zip-full curl \
+    && apt-get install -y --no-install-recommends unzip p7zip-full curl git \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=deps-dev /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
@@ -44,6 +44,7 @@ COPY pyproject.toml ./
 COPY zip_service ./zip_service
 COPY tests ./tests
 COPY scripts/smoke_client.sh /opt/smoke_client.sh
+COPY scripts/coverage_warn.py /opt/coverage_warn.py
 
 FROM python AS runtime
 ENV PATH="/opt/venv/bin:$PATH" \

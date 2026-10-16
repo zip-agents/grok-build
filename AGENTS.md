@@ -12,7 +12,7 @@ Docker. Every `make` target below runs inside an image built from this repo. The
 |---|---|
 | Fast tests | `make test-fast` |
 | Slow tests | `make test-slow` |
-| Both test suites | `make test` |
+| Both test suites, with coverage | `make test` |
 | Lint | `make lint` |
 | Format check | `make format-check` |
 | Format | `make format` |
@@ -22,7 +22,7 @@ Docker. Every `make` target below runs inside an image built from this repo. The
 | Runtime image | `make image` |
 | Read-only smoke | `make image-smoke` |
 
-`make check` builds the dev image once, then runs ruff, the format check, mypy, and both pytest suites inside it. `make image-smoke` builds the runtime image and the dev image, starts the API read-only, and runs the HTTP checks in the dev image. `scripts/smoke.sh` only talks to the Docker daemon. `curl`, `unzip`, and `cmp` run in the dev image via `scripts/smoke_client.sh`.
+`make check` builds the dev image once, then runs ruff, the format check, mypy, and both pytest suites inside it. Coverage includes the API subprocess. After the suites, `scripts/coverage_warn.py` warns on new `zip_service` lines the run did not execute. A warning does not fail the command. `make image-smoke` builds the runtime image and the dev image, starts the API read-only, and runs the HTTP checks in the dev image. `scripts/smoke.sh` only talks to the Docker daemon. `curl`, `unzip`, and `cmp` run in the dev image via `scripts/smoke_client.sh`.
 
 `unzip` and `7z` are installed in the dev image. Do not skip a test because a tool is missing.
 
@@ -77,7 +77,7 @@ These are not style preferences. Breaking one of them fails the contract or dead
 
 ## How to verify a change
 
-1. `make test-fast` for any change. It rebuilds the dev image and runs pytest inside it.
+1. `make test-fast` for any change. It rebuilds the dev image and runs pytest inside it. `make test` or `make check` also warns when a new `zip_service` line has no coverage.
 2. `make typecheck` and `make lint` when signatures or imports move.
 3. If you touched the buffer, the worker, timeouts, shutdown, or the socket writer, also run `make test-slow` and the integration modules in `tests/integration/test_duplex.py` and `tests/integration/test_limits.py`.
 4. If you touched name rules, disposition, or config, the unit tests in `tests/unit/` are the spec. Add a case there before changing the code.
@@ -92,7 +92,7 @@ A change that only passes an in-process ASGI client is not done. The integration
 - Comments explain a constraint that the code cannot show on its own, such as why `force_zip64` is set before the size is known. Do not restate the contract in comments.
 - New settings belong in `zip_service/config.py`, `.env.example`, and the README. Invalid configuration exits 2 with the variable name on stderr.
 - Problem codes and statuses live in `zip_service/api/problems.py`. Add a code in one place so the abort status and the HTTP status cannot drift.
-- Integration tests use `tests/integration/http_util.py` and a real subprocess from `server_proc.py` (`python -m zip_service` with `PYTHONPATH` set to the repo root). Do not add httpx for these tests.
+- Integration tests use `tests/integration/http_util.py` and a real subprocess from `server_proc.py` (`python -m zip_service` with `PYTHONPATH` set to the repo root). Do not add httpx for these tests. Leave `[tool.coverage.run] patch = ["subprocess"]` in place so that process is measured. Do not strip `COVERAGE_FILE` or `COVERAGE_PROCESS_START` from its environment.
 - Mark a test `slow` only when it moves tens of megabytes or waits on a real timeout. Idle timeouts in tests should be about 1 second.
 - `ZIP_SERVICE_TEST_HOOKS` is the only test seam. Do not add a backdoor that is on by default.
 - Commit in small steps that leave `make test-fast` green. Do not commit `.env`, virtualenvs, or the PDF modified.
