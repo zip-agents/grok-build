@@ -1,4 +1,4 @@
-from zip_service.disposition import content_disposition
+from archive.disposition import content_disposition
 
 
 def test_content_disposition_matches_the_contract_example() -> None:

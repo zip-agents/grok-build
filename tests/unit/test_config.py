@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from zip_service.config import ConfigError, load_settings, parse_dotenv
+from config import ConfigError, load_settings, parse_dotenv
 
 
 def test_defaults_when_nothing_is_set() -> None:

@@ -40,11 +40,13 @@ class RunningServer:
         for key in _CONFIG_KEYS:
             child_env.pop(key, None)
         child_env.update(env)
+        root = Path(__file__).resolve().parents[2]
         child_env["PORT"] = str(self.port)
         child_env["PYTHONDONTWRITEBYTECODE"] = "1"
         child_env["PYTHONUNBUFFERED"] = "1"
+        child_env["PYTHONPATH"] = str(root)
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "zip_service"],
+            [sys.executable, str(root / "server.py")],
             cwd=tmp_path,
             env=child_env,
             stdout=subprocess.PIPE,

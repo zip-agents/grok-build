@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from starlette.responses import Response
 
-from zip_service.jsonlog import request_id_var
+from runtime.jsonlog import request_id_var
 
 
 @dataclass(frozen=True, slots=True)

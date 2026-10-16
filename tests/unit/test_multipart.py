@@ -1,6 +1,6 @@
 import pytest
 
-from zip_service.multipart import (
+from api.multipart import (
     Finished,
     MediaTypeError,
     MultipartDecoder,

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from zip_service.constants import READ_CHUNK_BYTES
+from runtime.constants import READ_CHUNK_BYTES
 
 
 class BufferClosed(Exception):

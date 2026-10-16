@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from starlette.requests import ClientDisconnect
 
-from zip_service.constants import PART_HEADER_MAX_BYTES, PREAMBLE_MAX_BYTES, READ_CHUNK_BYTES
+from runtime.constants import PART_HEADER_MAX_BYTES, PREAMBLE_MAX_BYTES, READ_CHUNK_BYTES
 
 _BCHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'()+_,-./:=? ")
 

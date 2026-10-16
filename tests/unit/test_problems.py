@@ -1,6 +1,6 @@
 import json
 
-from zip_service.problems import ABORT_STATUS, PROBLEMS, problem_body
+from api.problems import ABORT_STATUS, PROBLEMS, problem_body
 
 
 def test_no_files_body_matches_the_contract_shape() -> None:

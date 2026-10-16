@@ -9,6 +9,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from tests.integration.http_util import exchange, multipart, problem, request_head
 from tests.integration.server_proc import RunningServer
@@ -172,11 +173,13 @@ def test_internal_error_hides_details(make_server: object) -> None:
 
 
 def test_bad_configuration_exits_nonzero(tmp_path: object) -> None:
+    root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()
     env["PORT"] = "nope"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = str(root)
     completed = subprocess.run(
-        [sys.executable, "-m", "zip_service"],
+        [sys.executable, str(root / "server.py")],
         cwd=tmp_path,  # type: ignore[arg-type]
         env=env,
         capture_output=True,

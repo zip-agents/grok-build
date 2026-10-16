@@ -15,8 +15,8 @@ import zipfile
 from datetime import UTC, datetime
 from typing import IO, Any, cast
 
-from zip_service.buffer import BufferClosed, OutputBuffer
-from zip_service.constants import INPUT_QUEUE_CHUNKS
+from runtime.buffer import BufferClosed, OutputBuffer
+from runtime.constants import INPUT_QUEUE_CHUNKS
 
 _FINISH = object()
 _ABORT = object()

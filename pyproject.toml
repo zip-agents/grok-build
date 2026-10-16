@@ -1,7 +1,7 @@
 [project]
 name = "zip-service"
 version = "1.0.0"
-description = "Streaming multipart-to-ZIP HTTP service"
+description = "Streaming multipart-to-ZIP HTTP API"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -16,9 +16,9 @@ dev = [
     "ruff>=0.9.0",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# This is an API process, not an installable library or command-line tool.
+[tool.uv]
+package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -30,7 +30,7 @@ addopts = ["-ra", "--strict-markers"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-src = ["src", "tests"]
+src = [".", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
@@ -41,6 +41,5 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "src"
-packages = ["zip_service"]
+files = ["app.py", "config.py", "server.py", "api", "archive", "runtime"]
 warn_unused_ignores = true

@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from zip_service.buffer import BufferClosed, OutputBuffer
-from zip_service.zipstream import StreamingZip, ZipWorker, dos_datetime
+from archive.zipstream import StreamingZip, ZipWorker, dos_datetime
+from runtime.buffer import BufferClosed, OutputBuffer
 
 
 class _Mem:
