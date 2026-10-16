@@ -28,44 +28,68 @@ curl -sS -o out.zip -D - \
 
 ## Tests, lint, and types
 
-One command for the fast suite and one for the slow suite:
+`make check` runs lint, the format check, mypy, the fast tests, and the slow tests. The same steps one at a time:
 
 ```bash
-make test-fast    # unit tests and integration tests, except the large upload
-make test-slow    # 24 MiB upload: memory bound and no files written
-make test         # both
-make lint         # ruff check
-make format-check # ruff format --check
-make format       # rewrite formatting
-make typecheck    # mypy
-make check        # lint, format, types, and both test suites
+make lint
+make format-check
+make typecheck
+make test-fast
+make test-slow
 ```
 
-Integration tests start a real `python -m zip_service` process and speak HTTP/1.1 on a socket. They call `unzip -t` and `7z t`, so both tools must be on `PATH`. A missing tool fails the test rather than skipping it.
+Without Make, after `uv sync --frozen --group dev`:
 
-`pytest -m "not slow"` and `pytest -m slow` are the same split if you are not using Make.
+```bash
+uv run --frozen ruff check src tests
+uv run --frozen ruff format --check src tests
+uv run --frozen mypy
+uv run --frozen pytest -m "not slow"
+uv run --frozen pytest -m slow
+```
+
+`make format` rewrites formatting. `make test` is the fast suite followed by the slow suite.
+
+Integration tests start a real `python -m zip_service` process and speak HTTP/1.1 on a socket. They call `unzip -t` and `7z t`, so both tools must be on `PATH`. A missing tool fails the test rather than skipping it.
 
 ## Container
 
 The image builds with `docker build .` from this directory. No build arguments. It runs as uid 10001, listens on `PORT`, and does not need a network at runtime. `PYTHONDONTWRITEBYTECODE=1` keeps a read-only root working without a writable `/tmp`.
 
-```bash
-make image
-make image-run
-make image-smoke
-```
-
-Those expand to:
+`make image-smoke` builds the image and then runs `scripts/smoke.sh`. The same steps one at a time:
 
 ```bash
 docker build -t zip-service:dev .
 
-docker run --rm --read-only --publish 8000:8000 --env PORT=8000 zip-service:dev
+docker rm -f zip-service-smoke || true
+docker run -d --name zip-service-smoke --read-only \
+  --env PORT=8000 --publish 8000:8000 zip-service:dev
 
-PORT=8000 sh scripts/smoke.sh zip-service:dev
+curl -fsS http://127.0.0.1:8000/health/live
+curl -fsS http://127.0.0.1:8000/health/ready
+
+printf 'hello\n' > /tmp/zip-smoke-a.txt
+curl -fsS -D /tmp/zip-smoke-headers.txt -o /tmp/zip-smoke-out.zip \
+  -F 'filename=quarterly report' \
+  -F 'files=@/tmp/zip-smoke-a.txt' \
+  http://127.0.0.1:8000/api/v1/zip
+
+grep -i '^content-type: application/zip' /tmp/zip-smoke-headers.txt
+grep -i 'filename="quarterly report.zip"' /tmp/zip-smoke-headers.txt
+unzip -t /tmp/zip-smoke-out.zip
+unzip -p /tmp/zip-smoke-out.zip a.txt | cmp - /tmp/zip-smoke-a.txt
+
+docker stop zip-service-smoke
+docker rm -f zip-service-smoke
 ```
 
-`make image-smoke` builds first, then starts the container with a read-only root, checks `/health/live` and `/health/ready`, uploads one file, checks the archive with `unzip`, and stops the container. `docker stop` sends `SIGTERM`. An idle process exits as soon as in-flight work has drained, so the default 10 second stop timeout is enough when nothing is uploading. An orchestrator that may interrupt a live upload must set its stop grace **above** `SHUTDOWN_GRACE_SECONDS` (default 25). Otherwise it will `SIGKILL` the process before the grace period ends.
+`make image` is only the build. `make image-run` is the foreground server:
+
+```bash
+docker run --rm --read-only --publish 8000:8000 --env PORT=8000 zip-service:dev
+```
+
+`docker stop` sends `SIGTERM`. An idle process exits as soon as in-flight work has drained, so the default 10 second stop timeout is enough when nothing is uploading. An orchestrator that may interrupt a live upload must set its stop grace **above** `SHUTDOWN_GRACE_SECONDS` (default 25). Otherwise it will `SIGKILL` the process before the grace period ends.
 
 The image is one process on purpose. Extra workers would each enforce `MAX_CONCURRENT_REQUESTS` separately.
 
