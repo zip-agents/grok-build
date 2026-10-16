@@ -11,11 +11,10 @@ __pycache__
 .coverage
 htmlcov
 .env
-tests
 link-tmp
 dist
 *.egg-info
 *.pdf
-scripts
-Makefile
 AGENTS.md
+Makefile
+README.md

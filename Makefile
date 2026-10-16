@@ -1,68 +1,80 @@
-# Local checks for zip-service.
-#
-# Fast tests and slow tests are separate so a small change does not pay for
-# the large-upload run. `make check` is the full local gate.
+# Every check runs in the dev image. `docker build .` is the runtime API image.
+# `make check` and `make image-smoke` are the full runs. The other targets are
+# the same steps one at a time.
 
-UV ?= uv
-UV_RUN = $(UV) run --frozen
+IMAGE ?= zip-service:dev
+DEV_IMAGE ?= zip-service:check
+PY = app.py config.py server.py api archive runtime tests
+DEV_RUN = docker run --rm --env PYTHONDONTWRITEBYTECODE=1 $(DEV_IMAGE)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install test test-fast test-slow lint format format-check typecheck check run \
-	image image-run image-smoke
+.PHONY: help dev-image image image-run image-smoke run \
+	lint format format-check typecheck test-fast test-slow test check
 
 help:
 	@printf '%s\n' \
-		'targets:' \
-		'  install        uv sync --frozen --group dev' \
-		'  test-fast      unit tests and integration tests except the large upload' \
-		'  test-slow      bounded-memory upload (pytest -m slow)' \
-		'  test           test-fast then test-slow' \
+		'full runs:' \
+		'  check          lint, format-check, typecheck, test-fast, test-slow' \
+		'  image-smoke    build the API image and smoke-test it' \
+		'one step at a time:' \
+		'  dev-image      docker build --target dev' \
 		'  lint           ruff check' \
-		'  format         ruff format (rewrites files)' \
 		'  format-check   ruff format --check' \
+		'  format         ruff format (writes the tree through a volume)' \
 		'  typecheck      mypy' \
-		'  check          lint, format-check, typecheck, and test' \
-		'  run            serve on PORT (default 8000)' \
-		'  image          docker build -t $$IMAGE (default zip-service:dev)' \
-		'  image-run      run the image read-only on port 8000' \
-		'  image-smoke    build, then health and zip smoke test'
+		'  test-fast      pytest -m "not slow"' \
+		'  test-slow      pytest -m slow' \
+		'  test           test-fast then test-slow' \
+		'  image          docker build .   (runtime API image)' \
+		'  run            serve that image, read-only, on port 8000'
 
-install:
-	$(UV) sync --frozen --group dev
-
-test-fast:
-	$(UV_RUN) pytest -m "not slow"
-
-test-slow:
-	$(UV_RUN) pytest -m slow
-
-test: test-fast test-slow
-
-lint:
-	$(UV_RUN) ruff check src tests
-
-format:
-	$(UV_RUN) ruff format src tests
-
-format-check:
-	$(UV_RUN) ruff format --check src tests
-
-typecheck:
-	$(UV_RUN) mypy
-
-check: lint format-check typecheck test
-
-run:
-	$(UV_RUN) python -m zip_service
-
-IMAGE ?= zip-service:dev
+dev-image:
+	docker build --target dev -t $(DEV_IMAGE) .
 
 image:
 	docker build -t $(IMAGE) .
 
-image-run:
+lint: dev-image
+	$(DEV_RUN) ruff check $(PY)
+
+format-check: dev-image
+	$(DEV_RUN) ruff format --check $(PY)
+
+format: dev-image
+	docker run --rm \
+		--user "$(shell id -u):$(shell id -g)" \
+		--env HOME=/tmp \
+		--volume "$(CURDIR):/work" \
+		--workdir /work \
+		$(DEV_IMAGE) ruff format --no-cache $(PY)
+
+typecheck: dev-image
+	$(DEV_RUN) mypy
+
+test-fast: dev-image
+	$(DEV_RUN) pytest -m "not slow"
+
+test-slow: dev-image
+	$(DEV_RUN) pytest -m slow
+
+test:
+	docker build --target dev -t $(DEV_IMAGE) .
+	$(DEV_RUN) pytest -m "not slow"
+	$(DEV_RUN) pytest -m slow
+
+check:
+	docker build --target dev -t $(DEV_IMAGE) .
+	$(DEV_RUN) ruff check $(PY)
+	$(DEV_RUN) ruff format --check $(PY)
+	$(DEV_RUN) mypy
+	$(DEV_RUN) pytest -m "not slow"
+	$(DEV_RUN) pytest -m slow
+
+run: image
 	docker run --rm --read-only --publish 8000:8000 --env PORT=8000 $(IMAGE)
 
-image-smoke: image
-	sh scripts/smoke.sh $(IMAGE)
+image-run: run
+
+image-smoke: image dev-image
+	IMAGE=$(IMAGE) DEV_IMAGE=$(DEV_IMAGE) sh scripts/smoke.sh

@@ -1,53 +1,31 @@
 #!/bin/sh
-# Build is separate (`make image`). This talks to a read-only container.
+# Host-side docker orchestration. The HTTP checks run in the dev image.
 set -eu
 
-IMAGE="${1:-zip-service:dev}"
+IMAGE="${IMAGE:-zip-service:dev}"
+DEV_IMAGE="${DEV_IMAGE:-zip-service:check}"
 PORT="${PORT:-8000}"
 NAME="${SMOKE_NAME:-zip-service-smoke}"
+NET="${SMOKE_NET:-zip-service-smoke-net}"
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-
-docker run -d --name "$NAME" --read-only \
-    --env "PORT=$PORT" \
-    --publish "${PORT}:${PORT}" \
-    "$IMAGE"
+docker network rm "$NET" >/dev/null 2>&1 || true
+docker network create "$NET" >/dev/null
 
 cleanup() {
     docker rm -f "$NAME" >/dev/null 2>&1 || true
+    docker network rm "$NET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-i=0
-while [ "$i" -lt 30 ]; do
-    if curl -fsS "http://127.0.0.1:${PORT}/health/live" >/dev/null 2>&1; then
-        break
-    fi
-    i=$((i + 1))
-    sleep 1
-done
+docker run -d --name "$NAME" --network "$NET" --network-alias zip-api \
+    --read-only --env "PORT=${PORT}" "$IMAGE"
 
-curl -fsS "http://127.0.0.1:${PORT}/health/live"
-printf '\n'
-curl -fsS "http://127.0.0.1:${PORT}/health/ready"
-printf '\n'
+docker run --rm --network "$NET" \
+    --env "PORT=${PORT}" --env API_HOST=zip-api \
+    "$DEV_IMAGE" sh /opt/smoke_client.sh
 
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"; docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
-
-printf 'hello\n' > "$tmpdir/a.txt"
-curl -fsS -D "$tmpdir/headers.txt" -o "$tmpdir/out.zip" \
-    -F 'filename=quarterly report' \
-    -F "files=@${tmpdir}/a.txt" \
-    "http://127.0.0.1:${PORT}/api/v1/zip"
-
-grep -i '^content-type: application/zip' "$tmpdir/headers.txt"
-grep -i 'filename="quarterly report.zip"' "$tmpdir/headers.txt"
-unzip -t "$tmpdir/out.zip"
-unzip -p "$tmpdir/out.zip" a.txt > "$tmpdir/got.txt"
-cmp "$tmpdir/a.txt" "$tmpdir/got.txt"
-
-# Idle process: SIGTERM should drain immediately and exit 0.
 docker stop "$NAME" >/dev/null
-
-printf 'smoke ok\n'
+status=$(docker inspect -f '{{.State.ExitCode}}' "$NAME")
+test "$status" -eq 0
+printf 'api exit %s\n' "$status"

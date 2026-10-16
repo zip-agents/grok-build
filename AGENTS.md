@@ -2,56 +2,58 @@
 
 This file is the working agreement for changes to zip-service. The contract in the task document is the behavioural spec. `README.md` explains the choices made where that contract is silent. Do not edit the exercise PDF.
 
+This is an HTTP API. There is no command-line tool and no installable library. The process entry is `server.py`.
+
 ## Setup
 
-Python 3.12 and uv.
-
-```bash
-uv sync --frozen --group dev
-```
-
-Commands:
+Docker. Every `make` target below runs inside an image built from this repo. The host does not need Python, uv, unzip, or 7z.
 
 | Task | Command |
 |---|---|
 | Fast tests | `make test-fast` |
 | Slow tests | `make test-slow` |
+| Both test suites | `make test` |
 | Lint | `make lint` |
 | Format check | `make format-check` |
 | Format | `make format` |
 | Types | `make typecheck` |
 | All of the above | `make check` |
-| Run | `make run` |
-| Image | `make image` |
+| Run the API | `make run` |
+| Runtime image | `make image` |
 | Read-only smoke | `make image-smoke` |
 
-`unzip` and `7z` must be on `PATH` for the integration tests. Do not skip a test because a tool is missing.
+`make check` builds the dev image once, then runs ruff, the format check, mypy, and both pytest suites inside it. `make image-smoke` builds the runtime image and the dev image, starts the API read-only, and runs the HTTP checks in the dev image. `scripts/smoke.sh` only talks to the Docker daemon. `curl`, `unzip`, and `cmp` run in the dev image via `scripts/smoke_client.sh`.
 
-This repository's checkout may sit on a filesystem that cannot hold a virtualenv (no symlinks). In that environment only:
+`unzip` and `7z` are installed in the dev image. Do not skip a test because a tool is missing.
 
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-export UV_PROJECT_ENVIRONMENT=/tmp/zip-venv
-make check
-```
+`docker build .` (no build args, last stage `runtime`) is the image that serves traffic. `docker build --target dev` is the image that lints and tests. Do not bake `.env` into either image.
 
-Do not commit that path, and do not add a `.venv` to the tree.
+This checkout cannot run Docker or Podman. Verify image targets on a machine that can, and paste the output back.
 
 ## Architecture
 
-`python -m zip_service` loads settings, installs `SIGTERM` and `SIGINT`, and runs uvicorn's `_serve` so uvicorn does not replace those handlers.
+`server.py` loads settings, installs `SIGTERM` and `SIGINT`, and runs uvicorn's `_serve` so uvicorn does not replace those handlers. It is not a CLI.
 
-`app.py` routes health checks and turns framework `404` and `405` into problem JSON. `POST /api/v1/zip` is a raw ASGI endpoint in `endpoint.py`.
+`app.py` builds the FastAPI app, routes health checks, and turns framework `404` and `405` into problem JSON. `POST /api/v1/zip` is a raw ASGI endpoint in `api/endpoint.py`.
 
 One request has three pieces:
 
 1. The event-loop task parses multipart and pushes small commands onto a bounded queue.
-2. `ZipWorker` (one daemon thread) compresses into `OutputBuffer`.
+2. `ZipWorker` (one daemon thread) compresses into `OutputBuffer` (`runtime/buffer.py`).
 3. A writer task copies that buffer to the ASGI send channel in slices of at most 64 KiB.
 
-`gate.py` counts in-flight zip requests and tracks shutdown. Health checks never take a slot.
+`api/gate.py` counts in-flight zip requests and tracks shutdown. Health checks never take a slot.
 
-Pure functions live in `names.py`, `disposition.py`, `problems.py`, `config.py`, and `multipart.py`. `zipstream.py` is the only module that touches `zipfile` internals.
+| Path | Role |
+|---|---|
+| `app.py` | Application, health, `404` and `405` |
+| `config.py` | Environment variables and `.env` |
+| `server.py` | Process entry |
+| `api/` | Zip route, multipart parser, limits, problem JSON |
+| `archive/` | Archive names, `Content-Disposition`, streaming ZIP |
+| `runtime/` | Output buffer, fixed byte caps, JSON logs |
+
+`archive/zipstream.py` is the only module that touches `zipfile` internals.
 
 ## Invariants
 
@@ -75,23 +77,24 @@ These are not style preferences. Breaking one of them fails the contract or dead
 
 ## How to verify a change
 
-1. `make test-fast` for any change.
+1. `make test-fast` for any change. It rebuilds the dev image and runs pytest inside it.
 2. `make typecheck` and `make lint` when signatures or imports move.
 3. If you touched the buffer, the worker, timeouts, shutdown, or the socket writer, also run `make test-slow` and the integration modules in `tests/integration/test_duplex.py` and `tests/integration/test_limits.py`.
 4. If you touched name rules, disposition, or config, the unit tests in `tests/unit/` are the spec. Add a case there before changing the code.
-5. If you touched the image, run `make image-smoke` on a machine with Docker. This environment cannot run Docker or Podman.
+5. If you touched the image or the Makefile, run `make image-smoke` on a machine with Docker.
 6. Watch a zip completion log: one JSON line per request, and no other stdout.
 
 A change that only passes an in-process ASGI client is not done. The integration tests exist because chunk framing, idle timeouts, and process shutdown are invisible there.
 
 ## Conventions
 
-- Python 3.12, type hints everywhere, mypy strict on `zip_service`. Tests are not in the mypy packages list. Ruff line length is 100. Run `make format` before committing.
+- Python 3.12, type hints everywhere. mypy is strict on `app.py`, `config.py`, `server.py`, `api`, `archive`, and `runtime`. Tests are not in that list. Ruff line length is 100. Run `make format` before committing. It writes through a volume, as the uid of the caller.
 - Comments explain a constraint that the code cannot show on its own, such as why `ZipFile` must not be closed. Do not restate the contract in comments.
 - New settings belong in `config.py`, `.env.example`, and the README. Invalid configuration exits 2 with the variable name on stderr.
-- Problem codes and statuses live in `problems.py`. Add a code in one place so the abort status and the HTTP status cannot drift.
-- Integration tests use `tests/integration/http_util.py` and a real subprocess from `server_proc.py`. Do not add httpx for these tests.
+- Problem codes and statuses live in `api/problems.py`. Add a code in one place so the abort status and the HTTP status cannot drift.
+- Integration tests use `tests/integration/http_util.py` and a real subprocess from `server_proc.py` (`python server.py` with `PYTHONPATH` set to the repo root). Do not add httpx for these tests.
 - Mark a test `slow` only when it moves tens of megabytes or waits on a real timeout. Idle timeouts in tests should be about 1 second.
 - `ZIP_SERVICE_TEST_HOOKS` is the only test seam. Do not add a backdoor that is on by default.
 - Commit in small steps that leave `make test-fast` green. Do not commit `.env`, virtualenvs, or the PDF modified.
-- The image stays one process, non-root, and able to run with a read-only root filesystem.
+- The runtime image stays one process, uid 10001, and able to run with a read-only root filesystem. Dependencies live in `/opt/venv` so a bind-mount of the source does not hide them.
+- Do not add a console script, a `__main__.py`, or a package named `http` (it would shadow the standard library when the repo root is on `sys.path`).

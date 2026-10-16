@@ -4,16 +4,15 @@ HTTP service that accepts a `multipart/form-data` upload and streams back a ZIP 
 
 The behaviour is specified by the contract in the task document (version 1.0.0). This README records how to run the service and the choices made where that contract is silent.
 
-## Run locally
+## Run
 
-Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
+The process is `server.py`. It listens on `0.0.0.0` and `PORT` (default `8000`). There is no command-line interface. In development, a `.env` file in the working directory is loaded when present. Real environment variables override it. Copy `.env.example` to start one. The service also starts with no `.env` at all.
+
+The host needs Docker. Python 3.12 and the dependencies live in the image. From this directory:
 
 ```bash
-uv sync --frozen --group dev
-uv run python -m zip_service
+make run
 ```
-
-The process listens on `0.0.0.0` and `PORT` (default `8000`). In development, a `.env` file in the working directory is loaded when present. Real environment variables override it. Copy `.env.example` to start one. The service also starts with no `.env` at all.
 
 ```bash
 curl -sS -o out.zip -D - \
@@ -24,13 +23,25 @@ curl -sS -o out.zip -D - \
   http://localhost:8000/api/v1/zip
 ```
 
-`make run` is the same server command.
+## Layout
+
+This is an HTTP API, not a library and not a command-line tool. `app.py` and `config.py` sit at the service root. The rest is grouped by job:
+
+| Path | Role |
+|---|---|
+| `app.py` | FastAPI application, health routes, `404` and `405` |
+| `config.py` | Environment variables and `.env` |
+| `server.py` | Process entry: signals and uvicorn |
+| `api/` | `POST /api/v1/zip`, multipart parser, limits, problem JSON |
+| `archive/` | Archive names, `Content-Disposition`, streaming ZIP |
+| `runtime/` | Output buffer, fixed byte caps, JSON logs |
 
 ## Tests, lint, and types
 
-`make check` runs lint, the format check, mypy, the fast tests, and the slow tests. The same steps one at a time:
+`make check` builds the dev image and runs lint, the format check, mypy, the fast tests, and the slow tests inside it. The same steps one at a time:
 
 ```bash
+make dev-image
 make lint
 make format-check
 make typecheck
@@ -38,52 +49,56 @@ make test-fast
 make test-slow
 ```
 
-Without Make, after `uv sync --frozen --group dev`:
+Those expand to:
 
 ```bash
-uv run --frozen ruff check src tests
-uv run --frozen ruff format --check src tests
-uv run --frozen mypy
-uv run --frozen pytest -m "not slow"
-uv run --frozen pytest -m slow
+docker build --target dev -t zip-service:check .
+
+docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
+  ruff check app.py config.py server.py api archive runtime tests
+
+docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
+  ruff format --check app.py config.py server.py api archive runtime tests
+
+docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check mypy
+
+docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
+  pytest -m "not slow"
+
+docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
+  pytest -m slow
 ```
 
-`make format` rewrites formatting. `make test` is the fast suite followed by the slow suite.
+`make format` runs `ruff format` in the dev image with the tree mounted, so it can write files. `make test` is the fast suite followed by the slow suite, after one image build.
 
-Integration tests start a real `python -m zip_service` process and speak HTTP/1.1 on a socket. They call `unzip -t` and `7z t`, so both tools must be on `PATH`. A missing tool fails the test rather than skipping it.
+Integration tests start a real `server.py` process inside that container and speak HTTP/1.1 on a socket. `unzip` and `7z` are installed in the dev image. A missing tool fails the test rather than skipping it.
 
 ## Container
 
 The image builds with `docker build .` from this directory. No build arguments. It runs as uid 10001, listens on `PORT`, and does not need a network at runtime. `PYTHONDONTWRITEBYTECODE=1` keeps a read-only root working without a writable `/tmp`.
 
-`make image-smoke` builds the image and then runs `scripts/smoke.sh`. The same steps one at a time:
+`make image-smoke` builds the runtime image and the dev image, starts the API read-only, and runs the HTTP checks inside the dev image. The same steps one at a time:
 
 ```bash
 docker build -t zip-service:dev .
+docker build --target dev -t zip-service:check .
 
-docker rm -f zip-service-smoke || true
-docker run -d --name zip-service-smoke --read-only \
-  --env PORT=8000 --publish 8000:8000 zip-service:dev
+docker network create zip-service-smoke-net
+docker run -d --name zip-service-smoke \
+  --network zip-service-smoke-net --network-alias zip-api \
+  --read-only --env PORT=8000 zip-service:dev
 
-curl -fsS http://127.0.0.1:8000/health/live
-curl -fsS http://127.0.0.1:8000/health/ready
-
-printf 'hello\n' > /tmp/zip-smoke-a.txt
-curl -fsS -D /tmp/zip-smoke-headers.txt -o /tmp/zip-smoke-out.zip \
-  -F 'filename=quarterly report' \
-  -F 'files=@/tmp/zip-smoke-a.txt' \
-  http://127.0.0.1:8000/api/v1/zip
-
-grep -i '^content-type: application/zip' /tmp/zip-smoke-headers.txt
-grep -i 'filename="quarterly report.zip"' /tmp/zip-smoke-headers.txt
-unzip -t /tmp/zip-smoke-out.zip
-unzip -p /tmp/zip-smoke-out.zip a.txt | cmp - /tmp/zip-smoke-a.txt
+docker run --rm --network zip-service-smoke-net \
+  --env PORT=8000 --env API_HOST=zip-api \
+  zip-service:check sh /opt/smoke_client.sh
 
 docker stop zip-service-smoke
+docker inspect -f '{{.State.ExitCode}}' zip-service-smoke
 docker rm -f zip-service-smoke
+docker network rm zip-service-smoke-net
 ```
 
-`make image` is only the build. `make image-run` is the foreground server:
+`make image` is only `docker build -t zip-service:dev .`. `make run` is the foreground server:
 
 ```bash
 docker run --rm --read-only --publish 8000:8000 --env PORT=8000 zip-service:dev
@@ -99,11 +114,10 @@ The image is one process on purpose. Extra workers would each enforce `MAX_CONCU
 
 | Job | Purpose |
 |---|---|
-| `lint` | `ruff check`, `ruff format --check`, and `mypy` on Python 3.12. This is the cheap gate that multiple contributors hit before the slower jobs. |
-| `test` | Installs `unzip` and `p7zip-full`, then runs `make test-fast` and `make test-slow` against a real server process. This is the behavioural gate. |
-| `image` | `docker build` and the read-only smoke test. It runs in parallel with lint and test so a broken image does not wait on the suite, and a broken suite does not hide an image failure. |
+| `check` | `make check`. Builds the dev image and runs ruff, mypy, and both test suites inside it, including `unzip` and `7z`. The code under test is the code copied into the image. |
+| `image` | `make image-smoke`. Builds the runtime image with `docker build .` and checks health plus one archive through a second container. This is the image that serves traffic: non-root, read-only, no test tools. |
 
-The jobs call the Makefile targets so local and CI commands stay the same. Action SHAs are pinned to `actions/checkout` v7.0.1 and `astral-sh/setup-uv` v10.3.0, and uv is pinned to 0.13.1, which is the version that produced `uv.lock`.
+The jobs run in parallel. A broken dev image does not hide a broken runtime image. `actions/checkout` is pinned to v7.0.1. The image installs uv 0.13.1, which is the version that produced `uv.lock`.
 
 ## Design
 
@@ -111,7 +125,7 @@ The jobs call the Makefile targets so local and CI commands stay the same. Actio
 
 The service is a small ASGI app: FastAPI for routing and health handlers, uvicorn for the HTTP/1.1 server, and the standard library for ZIP, compression, and multipart. `python-multipart` is not used because it can spool part bodies to disk. There is no HTTP client library in production; tests speak raw HTTP so chunked framing stays visible.
 
-uv manages the lockfile and the virtualenv. The package lives in `src/zip_service` and is built with hatchling. Python 3.12 matches the pinned container image (`python:3.12.15-slim-bookworm`).
+uv installs dependencies into the image. The service is not packaged as a library (`package = false`). Python 3.12 matches the pinned container image (`python:3.12.15-slim-bookworm`).
 
 Compression runs on one daemon thread per request. The event loop only parses multipart, applies backpressure, and writes the socket, so a health check stays responsive while an archive is produced. A thread pool is not used: the default pool can be smaller than `MAX_CONCURRENT_REQUESTS`, and a blocking `Queue.put` on that pool would stall the loop.
 
@@ -169,7 +183,7 @@ Tested locally:
 - 7-Zip 26.01 from p7zip, `7z t`
 - Python `zipfile.ZipFile.testzip()` on 3.12.15
 
-CI installs Debian `unzip` and `p7zip-full` and runs the same checks.
+The dev image installs Debian `unzip` and `p7zip-full`. CI runs the same checks inside that image.
 
 ### Request handling order
 
@@ -190,7 +204,7 @@ In-flight requests may finish until `SHUTDOWN_GRACE_SECONDS`. The process then c
 
 ## Choices where the contract is silent
 
-- **Problem text.** `no-files` uses the title and detail from the contract example. Every other problem uses the title and detail in `src/zip_service/problems.py`. Clients should match on `code`. Bodies are compact JSON with keys in the order `type`, `title`, `status`, `detail`, `code`, `request_id`.
+- **Problem text.** `no-files` uses the title and detail from the contract example. Every other problem uses the title and detail in `api/problems.py`. Clients should match on `code`. Bodies are compact JSON with keys in the order `type`, `title`, `status`, `detail`, `code`, `request_id`.
 - **`413` before streaming.** Streaming starts when the first non-skipped file is accepted, so with `MAX_FILES >= 1` the count cannot exceed the limit before the status line. `413 too-many-files` is still the code logged when a later file trips the limit, and the connection is aborted. The `413` problem body is implemented and unit-tested for a caller that hits it before streaming.
 - **Zip64 end record.** See the tools section above.
 - **Entry names after de-duplication** are not truncated again. `report (1).txt` can exceed 255 bytes. The contract's 255-byte rule applies before the ` (n)` suffix.
