@@ -1,8 +1,12 @@
 # zip-service
 
-Streaming multipart-to-ZIP service. Archive names, entry names, multipart parsing, and the ZIP writer are covered by unit tests.
+Streaming multipart-to-ZIP HTTP service.
 
 ```bash
 uv sync --frozen --group dev
-uv run pytest tests/unit
+uv run python -m zip_service
+uv run pytest -m "not slow"
+uv run pytest -m slow
 ```
+
+`unzip` and `7z` must be on `PATH`. Integration tests start a real server process.
