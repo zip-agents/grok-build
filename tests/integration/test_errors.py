@@ -179,7 +179,7 @@ def test_bad_configuration_exits_nonzero(tmp_path: object) -> None:
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPATH"] = str(root)
     completed = subprocess.run(
-        [sys.executable, str(root / "server.py")],
+        [sys.executable, "-m", "zip_service"],
         cwd=tmp_path,  # type: ignore[arg-type]
         env=env,
         capture_output=True,

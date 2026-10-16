@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unicodedata
 
-from runtime.constants import (
+from zip_service.runtime.constants import (
     DEFAULT_ARCHIVE_NAME,
     ENTRY_NAME_MAX_BYTES,
     SHORT_EXTENSION_MAX_BYTES,

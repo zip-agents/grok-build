@@ -1,10 +1,14 @@
 """Streaming ZIP writer.
 
-Entries are written with Zip64 local headers and data descriptors so a file
-can be compressed as it arrives. The central directory is written only when
-``close`` runs. ``abandon`` drops the archive without that record: ``ZipFile``
-would otherwise write it from ``close`` or ``__del__``, and a client would
-see a complete archive of a partial upload.
+``zipfile.ZipFile`` compresses each entry as its bytes arrive. The size is
+not known when the local header is written, so each entry is opened with
+``force_zip64=True``. That is the standard library's switch for a streamed
+entry that may grow past 2 GiB. ``allowZip64`` only applies when the size is
+already known.
+
+``close`` writes the central directory to the client. ``abandon`` stops
+forwarding bytes and then closes the archive, so those end records are not
+sent.
 """
 
 from __future__ import annotations
@@ -15,8 +19,8 @@ import zipfile
 from datetime import UTC, datetime
 from typing import IO, Any, cast
 
-from runtime.buffer import BufferClosed, OutputBuffer
-from runtime.constants import INPUT_QUEUE_CHUNKS
+from zip_service.runtime.buffer import BufferClosed, OutputBuffer
+from zip_service.runtime.constants import INPUT_QUEUE_CHUNKS
 
 _FINISH = object()
 _ABORT = object()
@@ -30,6 +34,39 @@ def dos_datetime(when: datetime) -> tuple[int, int, int, int, int, int]:
     when = when.astimezone(UTC)
     second = when.second - (when.second % 2)
     return (when.year, when.month, when.day, when.hour, when.minute, second)
+
+
+class _Forwarder:
+    """Bytes ZipFile writes. ``discard`` drops them instead of forwarding."""
+
+    def __init__(self, sink: IO[bytes]) -> None:
+        self._sink = sink
+        self._pos = 0
+        self._discarding = False
+
+    def discard(self) -> None:
+        self._discarding = True
+
+    def write(self, data: bytes) -> int:
+        if not self._discarding:
+            self._sink.write(data)
+            self._pos += len(data)
+        return len(data)
+
+    def tell(self) -> int:
+        return self._pos
+
+    def seekable(self) -> bool:
+        return False
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        raise OSError("zip output is not seekable")
+
+    def flush(self) -> None:
+        return None
+
+    def writable(self) -> bool:
+        return True
 
 
 class _Sink:
@@ -60,17 +97,6 @@ class _Sink:
         return True
 
 
-class _Discard:
-    def write(self, data: bytes) -> int:
-        return len(data)
-
-    def tell(self) -> int:
-        return 0
-
-    def flush(self) -> None:
-        return None
-
-
 class StreamingZip:
     def __init__(self, sink: IO[bytes], level: int, when: datetime) -> None:
         if level == 0:
@@ -79,8 +105,9 @@ class StreamingZip:
         else:
             compression = zipfile.ZIP_DEFLATED
             compresslevel = level
+        self._forward = _Forwarder(sink)
         self._zf = zipfile.ZipFile(
-            sink,
+            cast(IO[bytes], self._forward),
             mode="w",
             compression=compression,
             allowZip64=True,
@@ -94,10 +121,12 @@ class StreamingZip:
     def start_file(self, name: str) -> None:
         info = zipfile.ZipInfo(filename=name, date_time=self._stamp)
         info.compress_type = zipfile.ZIP_STORED if self._level == 0 else zipfile.ZIP_DEFLATED
-        # ZipFile.open does not copy compresslevel onto the ZipInfo it writes.
+        # ZipFile.open copies compresslevel only when the name is a str.
         cast(Any, info)._compresslevel = None if self._level == 0 else self._level
         # A non-zero mode stops ZipFile from substituting its default.
         info.external_attr = 0o644 << 16
+        # Size is unknown until the part ends. force_zip64 is what lets the
+        # entry grow past ZIP64_LIMIT (2 GiB) on a stream that cannot seek back.
         self._handle = self._zf.open(info, "w", force_zip64=True)
 
     def write(self, data: bytes) -> None:
@@ -122,21 +151,21 @@ class StreamingZip:
         self._zf.close()
 
     def abandon(self) -> None:
-        """Stop without writing the central directory."""
+        """Close the archive without sending its end records to the client."""
 
         if self._closed:
             return
         self._closed = True
-        archive = self._zf
-        # Finish a partial entry into a sink that is not the client buffer.
-        archive.fp = _Discard()  # type: ignore[assignment]
+        # Later writes, including ZipFile.close and __del__, stay off the client.
+        self._forward.discard()
         handle = self._handle
         self._handle = None
-        if handle is not None:
-            handle.close()
-        archive._writing = False  # type: ignore[attr-defined]
-        archive._didModify = False  # type: ignore[attr-defined]
-        archive.fp = None
+        try:
+            if handle is not None:
+                handle.close()
+            self._zf.close()
+        except Exception:
+            return
 
 
 class ZipWorker:

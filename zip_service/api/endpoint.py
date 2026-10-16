@@ -18,22 +18,22 @@ from datetime import UTC, datetime
 from starlette.requests import ClientDisconnect
 from starlette.types import Receive, Scope, Send
 
-from api.gate import Gate
-from api.multipart import (
+from zip_service.api.gate import Gate
+from zip_service.api.multipart import (
     AsyncMultipart,
     MediaTypeError,
     MultipartError,
     Part,
     classify_content_type,
 )
-from api.problems import ABORT_STATUS, PROBLEMS, problem_body
-from archive.disposition import content_disposition
-from archive.names import EntryNamer, InvalidArchiveName, resolve_archive_name
-from archive.zipstream import ZipWorker
-from config import Settings
-from runtime.buffer import BufferClosed, OutputBuffer
-from runtime.constants import FILENAME_FIELD_MAX_BYTES, RETRY_AFTER_SECONDS
-from runtime.jsonlog import emit
+from zip_service.api.problems import ABORT_STATUS, PROBLEMS, problem_body
+from zip_service.archive.disposition import content_disposition
+from zip_service.archive.names import EntryNamer, InvalidArchiveName, resolve_archive_name
+from zip_service.archive.zipstream import ZipWorker
+from zip_service.config import Settings
+from zip_service.runtime.buffer import BufferClosed, OutputBuffer
+from zip_service.runtime.constants import FILENAME_FIELD_MAX_BYTES, RETRY_AFTER_SECONDS
+from zip_service.runtime.jsonlog import emit
 
 _POLL_SECONDS = 0.1
 

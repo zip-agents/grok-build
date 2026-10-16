@@ -41,5 +41,5 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["app.py", "config.py", "server.py", "api", "archive", "runtime"]
+files = ["zip_service"]
 warn_unused_ignores = true

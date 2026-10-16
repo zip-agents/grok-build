@@ -46,7 +46,7 @@ class RunningServer:
         child_env["PYTHONUNBUFFERED"] = "1"
         child_env["PYTHONPATH"] = str(root)
         self.proc = subprocess.Popen(
-            [sys.executable, str(root / "server.py")],
+            [sys.executable, "-m", "zip_service"],
             cwd=tmp_path,
             env=child_env,
             stdout=subprocess.PIPE,

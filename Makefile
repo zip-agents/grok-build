@@ -4,7 +4,7 @@
 
 IMAGE ?= zip-service:dev
 DEV_IMAGE ?= zip-service:check
-PY = app.py config.py server.py api archive runtime tests
+PY = zip_service tests
 DEV_RUN = docker run --rm --env PYTHONDONTWRITEBYTECODE=1 $(DEV_IMAGE)
 
 .DEFAULT_GOAL := help

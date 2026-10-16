@@ -1,6 +1,7 @@
-"""API process. Listens on ``0.0.0.0`` and ``PORT``.
+"""Process entrypoint: ``python -m zip_service``.
 
-There is no command-line interface. Configuration comes from the environment.
+Listens on ``0.0.0.0`` and ``PORT``. There is no command-line interface.
+Configuration comes from the environment.
 """
 
 from __future__ import annotations
@@ -11,10 +12,10 @@ import sys
 
 import uvicorn
 
-from api.gate import Gate
-from app import create_app
-from config import ConfigError, load_settings
-from runtime.jsonlog import configure_logging, emit
+from zip_service.api.gate import Gate
+from zip_service.app import create_app
+from zip_service.config import ConfigError, load_settings
+from zip_service.runtime.jsonlog import configure_logging, emit
 
 
 def main() -> int:

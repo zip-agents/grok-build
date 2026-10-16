@@ -40,10 +40,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 WORKDIR /app
-COPY pyproject.toml app.py config.py server.py ./
-COPY api ./api
-COPY archive ./archive
-COPY runtime ./runtime
+COPY pyproject.toml ./
+COPY zip_service ./zip_service
 COPY tests ./tests
 COPY scripts/smoke_client.sh /opt/smoke_client.sh
 
@@ -56,12 +54,9 @@ ENV PATH="/opt/venv/bin:$PATH" \
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin zip
 COPY --from=deps --chown=zip:zip /opt/venv /opt/venv
 WORKDIR /app
-COPY --chown=zip:zip app.py config.py server.py ./
-COPY --chown=zip:zip api ./api
-COPY --chown=zip:zip archive ./archive
-COPY --chown=zip:zip runtime ./runtime
+COPY --chown=zip:zip zip_service ./zip_service
 USER zip
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health/live' % os.environ['PORT'], timeout=2).read()"]
-ENTRYPOINT ["python", "server.py"]
+ENTRYPOINT ["python", "-m", "zip_service"]

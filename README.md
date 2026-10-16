@@ -6,7 +6,7 @@ The behaviour is specified by the contract in the task document (version 1.0.0).
 
 ## Run
 
-The process is `server.py`. It listens on `0.0.0.0` and `PORT` (default `8000`). There is no command-line interface. In development, a `.env` file in the working directory is loaded when present. Real environment variables override it. Copy `.env.example` to start one. The service also starts with no `.env` at all.
+The process is `python -m zip_service`. It listens on `0.0.0.0` and `PORT` (default `8000`). There is no command-line interface. In development, a `.env` file in the working directory is loaded when present. Real environment variables override it. Copy `.env.example` to start one. The service also starts with no `.env` at all.
 
 The host needs Docker. Python 3.12 and the dependencies live in the image. From this directory:
 
@@ -25,16 +25,16 @@ curl -sS -o out.zip -D - \
 
 ## Layout
 
-This is an HTTP API, not a library and not a command-line tool. `app.py` and `config.py` sit at the service root. The rest is grouped by job:
+This is an HTTP API. The package is `zip_service`, and `python -m zip_service` is the process. There is no command-line interface.
 
 | Path | Role |
 |---|---|
-| `app.py` | FastAPI application, health routes, `404` and `405` |
-| `config.py` | Environment variables and `.env` |
-| `server.py` | Process entry: signals and uvicorn |
-| `api/` | `POST /api/v1/zip`, multipart parser, limits, problem JSON |
-| `archive/` | Archive names, `Content-Disposition`, streaming ZIP |
-| `runtime/` | Output buffer, fixed byte caps, JSON logs |
+| `zip_service/__main__.py` | Process entry: signals and uvicorn |
+| `zip_service/app.py` | FastAPI application, health routes, `404` and `405` |
+| `zip_service/config.py` | Environment variables and `.env` |
+| `zip_service/api/` | `POST /api/v1/zip`, multipart parser, limits, problem JSON |
+| `zip_service/archive/` | Archive names, `Content-Disposition`, streaming ZIP |
+| `zip_service/runtime/` | Output buffer, fixed byte caps, JSON logs |
 
 ## Tests, lint, and types
 
@@ -55,10 +55,10 @@ Those expand to:
 docker build --target dev -t zip-service:check .
 
 docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
-  ruff check app.py config.py server.py api archive runtime tests
+  ruff check zip_service tests
 
 docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
-  ruff format --check app.py config.py server.py api archive runtime tests
+  ruff format --check zip_service tests
 
 docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check mypy
 
@@ -71,7 +71,7 @@ docker run --rm --env PYTHONDONTWRITEBYTECODE=1 zip-service:check \
 
 `make format` runs `ruff format` in the dev image with the tree mounted, so it can write files. `make test` is the fast suite followed by the slow suite, after one image build.
 
-Integration tests start a real `server.py` process inside that container and speak HTTP/1.1 on a socket. `unzip` and `7z` are installed in the dev image. A missing tool fails the test rather than skipping it.
+Integration tests start a real `python -m zip_service` process inside that container and speak HTTP/1.1 on a socket. `unzip` and `7z` are installed in the dev image. A missing tool fails the test rather than skipping it.
 
 ## Container
 
@@ -133,9 +133,9 @@ Compression runs on one daemon thread per request. The event loop only parses mu
 
 The handler reads the upload as ASGI body chunks. A custom multipart parser keeps at most one read chunk (64 KiB) plus a short boundary lookahead. Preamble and part headers are capped at 64 KiB each.
 
-The first non-skipped file part is when streaming begins. The response status and headers are sent then, after the archive name has been validated, and not before. Each file is compressed as its bytes arrive. `zipfile.ZipFile` writes to an unseekable sink with `force_zip64=True`, so every local header carries Zip64 extensions (version 45). The central directory and the end-of-central-directory record are written only after the last file has been closed and the multipart epilogue has been drained. The terminating HTTP chunk is sent only after that.
+The first non-skipped file part is when streaming begins. The response status and headers are sent then, after the archive name has been validated, and not before. Each file is compressed as its bytes arrive. `zipfile.ZipFile` writes to an unseekable sink. Because the size is not known yet, each entry is opened with `force_zip64=True`, which is how the standard library allows a streamed entry to grow past 2 GiB. The local header is therefore version 45. The central directory and the end-of-central-directory record are written only after the last file has been closed and the multipart epilogue has been drained. The terminating HTTP chunk is sent only after that.
 
-On a failure after the status line, the open entry is finished into a discard sink, the `ZipFile` is marked unmodified, and it is not closed. Closing it would append the end-of-central-directory record. The ASGI response is returned without `more_body=False`, which makes uvicorn close the connection without the terminating `0` chunk. The client receives a truncated archive that `unzip` rejects.
+On a failure after the status line, the sink stops forwarding and the archive is closed through `ZipFile`. The end records are produced and then dropped, so they never reach the client. The ASGI response is returned without `more_body=False`, which makes uvicorn close the connection without the terminating `0` chunk. The client receives a truncated archive that `unzip` rejects.
 
 ### Duplex behaviour and the output buffer
 
@@ -174,7 +174,7 @@ A blocked socket write holds at most one extra 64 KiB slice, because the writer 
 
 ### Archive tools the output was tested with
 
-Every entry is written with a Zip64 local header. The Zip64 end-of-central-directory record is emitted only when a size exceeds the classic 4 GiB fields. Small archives therefore have Zip64 local headers and a classic end record. That is what CPython's `zipfile` produces with `force_zip64=True`, and it is what was tested.
+Streamed entries use Zip64 local headers because `force_zip64=True` is set before the size is known. The Zip64 end-of-central-directory record is emitted only when a size exceeds the classic fields. Small archives therefore have Zip64 local headers and a classic end record. That is what CPython's `zipfile` produces, and it is what was tested.
 
 Tested locally:
 
@@ -204,7 +204,7 @@ In-flight requests may finish until `SHUTDOWN_GRACE_SECONDS`. The process then c
 
 ## Choices where the contract is silent
 
-- **Problem text.** `no-files` uses the title and detail from the contract example. Every other problem uses the title and detail in `api/problems.py`. Clients should match on `code`. Bodies are compact JSON with keys in the order `type`, `title`, `status`, `detail`, `code`, `request_id`.
+- **Problem text.** `no-files` uses the title and detail from the contract example. Every other problem uses the title and detail in `zip_service/api/problems.py`. Clients should match on `code`. Bodies are compact JSON with keys in the order `type`, `title`, `status`, `detail`, `code`, `request_id`.
 - **`413` before streaming.** Streaming starts when the first non-skipped file is accepted, so with `MAX_FILES >= 1` the count cannot exceed the limit before the status line. `413 too-many-files` is still the code logged when a later file trips the limit, and the connection is aborted. The `413` problem body is implemented and unit-tested for a caller that hits it before streaming.
 - **Zip64 end record.** See the tools section above.
 - **Entry names after de-duplication** are not truncated again. `report (1).txt` can exceed 255 bytes. The contract's 255-byte rule applies before the ` (n)` suffix.
@@ -240,7 +240,6 @@ In-flight requests may finish until `SHUTDOWN_GRACE_SECONDS`. The process then c
 ## With more time
 
 - Property tests and a multipart fuzzer around the parser and the name rules.
-- A small ZIP writer so the failure path does not touch private `ZipFile` attributes.
 - A measured choice of chunk size, and a histogram of RSS under the default concurrency.
 - HTTP/2, once a client that interleaves upload and download is part of the deployment.
 - Request metrics (in-flight count, abort reason) without putting another format on stdout.

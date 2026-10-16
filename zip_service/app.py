@@ -14,12 +14,12 @@ from starlette.responses import Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from api.endpoint import ZipEndpoint
-from api.gate import Gate
-from api.problems import problem_response
-from config import Settings, load_settings
-from runtime.constants import REQUEST_ID_PATTERN
-from runtime.jsonlog import configure_logging, emit, request_id_var
+from zip_service.api.endpoint import ZipEndpoint
+from zip_service.api.gate import Gate
+from zip_service.api.problems import problem_response
+from zip_service.config import Settings, load_settings
+from zip_service.runtime.constants import REQUEST_ID_PATTERN
+from zip_service.runtime.jsonlog import configure_logging, emit, request_id_var
 
 _REQUEST_ID_RE = re.compile(REQUEST_ID_PATTERN)
 

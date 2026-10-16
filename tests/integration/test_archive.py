@@ -58,7 +58,8 @@ def test_contract_example(server: RunningServer, tmp_path: Path) -> None:
     assert archive.read("a.txt") == b"alpha"
     assert archive.read("a (1).txt") == b"beta"
     assert archive.read("photo.jpg") == b"\xff\xd8jpeg"
-    # Every local header asks for Zip64.
+    # Streamed entries use ZipFile.open(..., force_zip64=True), so the local
+    # header is version 45 even when the file is small.
     assert body[4:6] == (45).to_bytes(2, "little")
 
     path = tmp_path / "out.zip"
