@@ -1,0 +1,46 @@
+[project]
+name = "zip-service"
+version = "1.0.0"
+description = "Streaming multipart-to-ZIP HTTP service"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.6",
+    "uvicorn>=0.34.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.14.0",
+    "pytest>=8.3.4",
+    "ruff>=0.9.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: large uploads, idle-timeout waits, or shutdown sequences",
+]
+addopts = ["-ra", "--strict-markers"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["zip_service"]
+warn_unused_ignores = true
