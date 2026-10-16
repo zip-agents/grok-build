@@ -97,7 +97,7 @@ docker run --rm \
   --volume "$PWD:/repo" \
   --volume "$PWD/.coverage-data:/coverage:ro" \
   zip-service:check \
-  python /opt/coverage_warn.py --repo /repo --xml /coverage/coverage.xml
+  python /app/scripts/coverage_warn.py --repo /repo --xml /coverage/coverage.xml
 ```
 
 Integration tests start a real `python -m zip_service` process inside that container and speak HTTP/1.1 on a socket. `unzip` and `7z` are installed in the dev image. A missing tool fails the test rather than skipping it.

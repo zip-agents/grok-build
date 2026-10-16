@@ -43,8 +43,8 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY zip_service ./zip_service
 COPY tests ./tests
+COPY scripts ./scripts
 COPY scripts/smoke_client.sh /opt/smoke_client.sh
-COPY scripts/coverage_warn.py /opt/coverage_warn.py
 
 FROM python AS runtime
 ENV PATH="/opt/venv/bin:$PATH" \

@@ -19,7 +19,7 @@ COV_WARN = docker run --rm \
 	--volume "$(CURDIR):/repo" \
 	--volume "$(COV_DIR):/coverage:ro" \
 	$(DEV_IMAGE) \
-	python /opt/coverage_warn.py --repo /repo --xml /coverage/coverage.xml
+	python /app/scripts/coverage_warn.py --repo /repo --xml /coverage/coverage.xml
 
 .DEFAULT_GOAL := help
 
