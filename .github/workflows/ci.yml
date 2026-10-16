@@ -1,0 +1,84 @@
+# Lint, tests, and an image build. See README "Continuous integration".
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python 3.12
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Ruff
+        run: make lint
+
+      - name: Format
+        run: make format-check
+
+      - name: Mypy
+        run: make typecheck
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python 3.12
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install unzip and 7z
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends unzip p7zip-full
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Fast tests
+        run: make test-fast
+
+      - name: Slow tests
+        run: make test-slow
+
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install curl and unzip
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends curl unzip ca-certificates
+
+      - name: Build image
+        run: make image IMAGE=zip-service:ci
+
+      - name: Smoke test the read-only image
+        run: make image-smoke IMAGE=zip-service:ci
