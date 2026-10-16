@@ -21,8 +21,15 @@ trap cleanup EXIT
 docker run -d --name "$NAME" --network "$NET" --network-alias zip-api \
     --read-only --env "PORT=${PORT}" "$IMAGE"
 
+if [ -n "${GIT_SHA:-}" ]; then
+    expected_sha="$GIT_SHA"
+else
+    expected_sha=unknown
+fi
+
 docker run --rm --network "$NET" \
     --env "PORT=${PORT}" --env API_HOST=zip-api \
+    --env EXPECTED_GIT_SHA="$expected_sha" \
     "$DEV_IMAGE" sh /opt/smoke_client.sh
 
 docker stop "$NAME" >/dev/null

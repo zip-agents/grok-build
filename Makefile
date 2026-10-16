@@ -30,7 +30,7 @@ help:
 	@printf '%s\n' \
 		'full runs:' \
 		'  check          lint, format-check, typecheck, both suites, coverage warn' \
-		'  image-smoke    build the API image and smoke-test it' \
+		'  image-smoke    build the API image and smoke-test it (optional GIT_SHA)' \
 		'one step at a time:' \
 		'  dev-image      docker build --target dev' \
 		'  lint           ruff check' \
@@ -41,14 +41,14 @@ help:
 		'  test-slow      pytest -m slow' \
 		'  test           both suites, then warn on new uncovered lines' \
 		'  coverage-warn  warn from the coverage report make test wrote' \
-		'  image          docker build .   (runtime API image)' \
+		'  image          docker build .   (runtime API image; optional GIT_SHA)' \
 		'  run            serve that image, read-only, on port 8000'
 
 dev-image:
 	docker build --target dev -t $(DEV_IMAGE) .
 
 image:
-	docker build -t $(IMAGE) .
+	docker build $(if $(GIT_SHA),--build-arg GIT_SHA=$(GIT_SHA),) -t $(IMAGE) .
 
 lint: dev-image
 	$(DEV_RUN) ruff check $(PY)
@@ -103,4 +103,4 @@ run: image
 image-run: run
 
 image-smoke: image dev-image
-	IMAGE=$(IMAGE) DEV_IMAGE=$(DEV_IMAGE) sh scripts/smoke.sh
+	IMAGE=$(IMAGE) DEV_IMAGE=$(DEV_IMAGE) GIT_SHA="$(GIT_SHA)" sh scripts/smoke.sh

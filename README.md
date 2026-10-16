@@ -2,7 +2,7 @@
 
 HTTP service that accepts a `multipart/form-data` upload and streams back a ZIP archive. Upload bytes are not written to disk, and memory per request is bounded by configuration rather than by the size of the upload.
 
-The behaviour is specified by the contract in the task document (version 1.0.0). This README records how to run the service and the choices made where that contract is silent.
+The behaviour is specified by the contract in the task document (version 1.1.0). This README records how to run the service and the choices made where that contract is silent. The running image serves this file and the AGENTS document for the docs portal. See Documentation below.
 
 ## Run
 
@@ -30,7 +30,8 @@ This is an HTTP API. The package is `zip_service`, and `python -m zip_service` i
 | Path | Role |
 |---|---|
 | `zip_service/__main__.py` | Process entry: signals and uvicorn |
-| `zip_service/app.py` | FastAPI application, health routes, `404` and `405` |
+| `zip_service/app.py` | FastAPI application, health routes, docs routes, `404` and `405` |
+| `zip_service/documents.py` | Fixed docs allow-list and manifest |
 | `zip_service/config.py` | Environment variables and `.env` |
 | `zip_service/api/` | `POST /api/v1/zip`, multipart parser, limits, problem JSON |
 | `zip_service/archive/` | Archive names, `Content-Disposition`, streaming ZIP |
@@ -104,7 +105,7 @@ Integration tests start a real `python -m zip_service` process inside that conta
 
 ## Container
 
-The image builds with `docker build .` from this directory. No build arguments. It runs as uid 10001, listens on `PORT`, and does not need a network at runtime. `PYTHONDONTWRITEBYTECODE=1` keeps a read-only root working without a writable `/tmp`.
+The image builds with `docker build .` from this directory. The build takes no required arguments. An optional `GIT_SHA` build argument is the `revision` reported by `GET /docs/manifest.json`. When that argument is omitted, or is an empty string, `revision` is `unknown`. The image runs as uid 10001, listens on `PORT`, and does not need a network at runtime. `PYTHONDONTWRITEBYTECODE=1` keeps a read-only root working without a writable `/tmp`.
 
 `make image-smoke` builds the runtime image and the dev image, starts the API read-only, and runs the HTTP checks inside the dev image. The same steps one at a time:
 
@@ -119,6 +120,7 @@ docker run -d --name zip-service-smoke \
 
 docker run --rm --network zip-service-smoke-net \
   --env PORT=8000 --env API_HOST=zip-api \
+  --env EXPECTED_GIT_SHA=unknown \
   zip-service:check sh /opt/smoke_client.sh
 
 docker stop zip-service-smoke
@@ -127,7 +129,7 @@ docker rm -f zip-service-smoke
 docker network rm zip-service-smoke-net
 ```
 
-`make image` is only `docker build -t zip-service:dev .`. `make run` is the foreground server:
+`make image` is `docker build -t zip-service:dev .`. `make image GIT_SHA=$(git rev-parse HEAD)` passes that commit as the build argument. `make image-smoke GIT_SHA=$(git rev-parse HEAD)` builds with it and checks that the manifest reports it. `make run` is the foreground server:
 
 ```bash
 docker run --rm --read-only --publish 8000:8000 --env PORT=8000 zip-service:dev
@@ -137,6 +139,26 @@ docker run --rm --read-only --publish 8000:8000 --env PORT=8000 zip-service:dev
 
 The image is one process on purpose. Extra workers would each enforce `MAX_CONCURRENT_REQUESTS` separately.
 
+## Documentation
+
+An API gateway hosts the authenticated docs portal. It fetches this service's markdown from the running container over the private network and renders it, so the portal matches the deployed build. The markdown is the only input. FastAPI's Swagger, ReDoc, and `/openapi.json` stay off. The gateway hosts the API reference.
+
+`GET /docs/manifest.json` returns JSON:
+
+| Field | Value |
+|---|---|
+| `service` | `zip-service` |
+| `version` | `project.version` from the `pyproject.toml` copied into the image |
+| `revision` | The `GIT_SHA` environment variable set at build time. `unknown` when it is unset or empty |
+| `contract_version` | `1.1.0` |
+| `documents` | `readme` at `/docs/README.md`, then `agents` at `/docs/AGENTS.md` |
+
+`GET /docs/README.md` and `GET /docs/AGENTS.md` return those files with `Content-Type: text/markdown; charset=utf-8`, `Cache-Control: no-cache`, and `X-Content-Type-Options: nosniff`. Any other name is `404 not-found`, the same problem document as any other unknown path.
+
+The files are copied into the image at build time. Each must be at most 1 MiB. The process builds the allow-list once at startup and serves those paths only. A request path is never joined onto a filesystem path. These routes are outside `/api/v1`, do not take a concurrency slot, and do not require authentication.
+
+The portal renders CommonMark, GitHub-style tables, and strikethrough. It shows raw HTML as text, and it shows diagram blocks as plain code. A relative link to another document does not resolve there, so this file names the AGENTS document in prose. `FileResponse` may answer a `Range` request with `206`.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on pull requests, on pushes to `main`, and on `workflow_dispatch`. A newer push cancels the previous run on the same ref. The workflow has `contents: read` only.
@@ -144,7 +166,7 @@ The image is one process on purpose. Extra workers would each enforce `MAX_CONCU
 | Job | Purpose |
 |---|---|
 | `check` | `make check`. Builds the dev image and runs ruff, mypy, and both test suites inside it, including `unzip` and `7z`. The code under test is the code copied into the image. New `zip_service` lines with no coverage are annotations on the diff. They do not fail the job. |
-| `image` | `make image-smoke`. Builds the runtime image with `docker build .` and checks health plus one archive through a second container. This is the image that serves traffic: non-root, read-only, no test tools. |
+| `image` | `make image-smoke` with `GIT_SHA` set to the checked-out commit. Builds the runtime image and checks health, the docs manifest, and one archive through a second container. This is the image that serves traffic: non-root, read-only, no test tools. |
 
 The jobs run in parallel. A broken dev image does not hide a broken runtime image. `actions/checkout` is pinned to v7.0.1. The image installs uv 0.13.1, which is the version that produced `uv.lock`.
 
@@ -223,7 +245,7 @@ For `POST /api/v1/zip`:
 3. Otherwise the request takes a slot or gets `503 overloaded` with `Retry-After: 5`.
 4. The body is parsed. The slot is released when the request finishes, including on disconnect and on failure.
 
-The gate is a counter, not a semaphore. Extra requests are rejected immediately. Health endpoints do not take a slot.
+The gate is a counter, not a semaphore. Extra requests are rejected immediately. Health endpoints and the documentation endpoints do not take a slot.
 
 ### Shutdown
 
@@ -247,10 +269,10 @@ In-flight requests may finish until `SHUTDOWN_GRACE_SECONDS`. The process then c
 - **Multipart framing** is strict CRLF. The boundary is 1–70 RFC 2046 `bchars`, including space. The last `boundary` parameter on `Content-Type` wins. The first `Content-Disposition` wins. Folded header lines are joined. No `Content-Transfer-Encoding` decoding.
 - **Preamble and part headers** over 64 KiB are a malformed body.
 - **Timestamps** are the request's arrival time in UTC, stored in the DOS fields, rounded down to an even second. External attributes are `0o644 << 16`.
-- **HTTP surface.** HTTP/1.1 only. `Date` and `Server` are omitted. `proxy_headers` is off. No `Content-Length` on a zip response. Error responses, including framework `404` and `405`, are `application/problem+json` with `Connection: close`. `405` keeps `Allow`. OpenAPI, Swagger, and ReDoc are off, and slash redirects are off, so an unknown path or a trailing slash is `404`. Health `503` is `{"status":"shutting-down"}`, not a problem document. Success responses may stay keep-alive.
+- **HTTP surface.** HTTP/1.1 only. `Date` and `Server` are omitted. `proxy_headers` is off. No `Content-Length` on a zip response. Error responses, including framework `404` and `405`, are `application/problem+json` with `Connection: close`. `405` keeps `Allow`. OpenAPI, Swagger, and ReDoc are off, and slash redirects are off, so an unknown path or a trailing slash is `404`. The baked markdown listed by `GET /docs/manifest.json` is the documentation surface. See Documentation. Health `503` is `{"status":"shutting-down"}`, not a problem document. Success responses may stay keep-alive.
 - **Request id.** The first `X-Request-ID` that matches `^[A-Za-z0-9._-]{1,128}$` is used, with no trimming. Otherwise a UUIDv4. It is stored on the ASGI scope so `404` and `405` still echo it.
-- **Logs.** JSON lines on stdout only. Configuration errors go to stderr and the process exits 2. Each zip request emits one line, message `zip request finished`. `duration_ms` is rounded to an integer. `bytes_in` is request body bytes. `bytes_out` is response body bytes, not headers and not the terminating chunk. `files_count` counts non-skipped file parts that started, including a partial one. `code` is omitted when `outcome` is `completed`.
-- **Outcomes.** A full HTTP error before streaming is `rejected`. A cut stream is `aborted`, and `status` is the status that would have been sent. A client disconnect before any status is `client_disconnected` with `status` 0 and `code` `client-disconnected`. A disconnect after `200` keeps `status` 200. Shutdown of a request that still receives a complete `503` is `rejected`. Cancelling a stream at the end of grace is `aborted` with `503` and `shutting-down`. Levels: completed and shutting-down are `INFO`, client-caused failures are `WARNING`, `internal-error` is `ERROR` (the log may include `error_type`, never the exception text). A field part after streaming has begun logs one `WARNING` and does not add a second completion line. `404` and `405` log `request rejected` and are not zip completion lines. Health requests are not logged.
+- **Logs.** JSON lines on stdout only. Configuration errors go to stderr and the process exits 2. A missing, oversized, or invalid baked document does the same, with `documentation error` on stderr. Each zip request emits one line, message `zip request finished`. `duration_ms` is rounded to an integer. `bytes_in` is request body bytes. `bytes_out` is response body bytes, not headers and not the terminating chunk. `files_count` counts non-skipped file parts that started, including a partial one. `code` is omitted when `outcome` is `completed`.
+- **Outcomes.** A full HTTP error before streaming is `rejected`. A cut stream is `aborted`, and `status` is the status that would have been sent. A client disconnect before any status is `client_disconnected` with `status` 0 and `code` `client-disconnected`. A disconnect after `200` keeps `status` 200. Shutdown of a request that still receives a complete `503` is `rejected`. Cancelling a stream at the end of grace is `aborted` with `503` and `shutting-down`. Levels: completed and shutting-down are `INFO`, client-caused failures are `WARNING`, `internal-error` is `ERROR` (the log may include `error_type`, never the exception text). A field part after streaming has begun logs one `WARNING` and does not add a second completion line. `404` and `405` log `request rejected` and are not zip completion lines. Health requests are not logged. A successful documentation request is not logged. An unknown document name is an ordinary `404`.
 - **Internal errors** return the fixed problem body. Stack traces and exception messages are not sent to the client.
 - **Configuration.** An empty string is a set value and is validated, not replaced by the default. Integers must match `[+-]?\d+`. `PORT` is 1–65535. `ZIP_COMPRESSION_LEVEL` is 0–9. `SHUTDOWN_GRACE_SECONDS` may be 0. Other limits are integers ≥ 1 with no upper cap. `LOG_LEVEL` is case-insensitive. The `.env` parser accepts comments, an optional `export` prefix, and matching quotes. It does not interpolate. A malformed line fails startup.
 - **Test fault.** `ZIP_SERVICE_TEST_HOOKS=1` plus header `X-Zip-Test-Fault: before-stream` or `mid-stream` injects an internal error. The header is ignored unless the environment variable is set. It is not a supported setting and is absent from `.env.example`.

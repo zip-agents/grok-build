@@ -17,7 +17,5 @@ link-tmp
 dist
 *.egg-info
 *.pdf
-AGENTS.md
 Makefile
 PLAN.md
-README.md

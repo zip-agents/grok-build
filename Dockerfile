@@ -1,5 +1,6 @@
 # python:3.12.15-slim-bookworm, multi-arch index digest.
 # `docker build .` needs no build arguments and produces the runtime API image.
+# Optional build-arg GIT_SHA is the revision on /docs/manifest.json (default unknown).
 # The dev stage is only for lint, types, and tests (`docker build --target dev`).
 # amd64 manifest: sha256:2ed6491b93cd49272ee6de2b5a38440c3448360322c089fc23e370722d74179d
 FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258 AS python
@@ -41,13 +42,16 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY pyproject.toml ./
+COPY README.md AGENTS.md ./
 COPY zip_service ./zip_service
 COPY tests ./tests
 COPY scripts ./scripts
 COPY scripts/smoke_client.sh /opt/smoke_client.sh
 
 FROM python AS runtime
-ENV PATH="/opt/venv/bin:$PATH" \
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA} \
+    PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH="/app" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -55,6 +59,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin zip
 COPY --from=deps --chown=zip:zip /opt/venv /opt/venv
 WORKDIR /app
+# pyproject.toml is the version on the docs manifest. The markdown is the portal.
+COPY --chown=zip:zip pyproject.toml README.md AGENTS.md ./
 COPY --chown=zip:zip zip_service ./zip_service
 USER zip
 EXPOSE 8000

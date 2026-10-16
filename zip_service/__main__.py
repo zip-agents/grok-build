@@ -15,6 +15,7 @@ import uvicorn
 from zip_service.api.gate import Gate
 from zip_service.app import create_app
 from zip_service.config import ConfigError, load_settings
+from zip_service.documents import DocumentError
 from zip_service.runtime.jsonlog import configure_logging, emit
 
 
@@ -28,7 +29,11 @@ def main() -> int:
         return 2
 
     configure_logging(settings.log_level)
-    app = create_app(settings)
+    try:
+        app = create_app(settings)
+    except DocumentError as exc:
+        sys.stderr.write(f"documentation error: {exc}\n")
+        return 2
     config = uvicorn.Config(
         app,
         host="0.0.0.0",

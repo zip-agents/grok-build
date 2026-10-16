@@ -6,11 +6,12 @@ import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
-from starlette.responses import Response
+from starlette.responses import FileResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -18,6 +19,13 @@ from zip_service.api.endpoint import ZipEndpoint
 from zip_service.api.gate import Gate
 from zip_service.api.problems import problem_response
 from zip_service.config import Settings, load_settings
+from zip_service.documents import (
+    Catalog,
+    Document,
+    document_response,
+    load_catalog,
+    manifest_response,
+)
 from zip_service.runtime.constants import REQUEST_ID_PATTERN
 from zip_service.runtime.jsonlog import configure_logging, emit, request_id_var
 
@@ -29,11 +37,12 @@ _HTTP_CODES = {
 }
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, docs_root: Path | None = None) -> FastAPI:
     """Build the application. Pass ``settings`` in tests; otherwise load them."""
 
     resolved = settings if settings is not None else load_settings()
     gate = Gate(resolved.max_concurrent_requests)
+    catalog = load_catalog(docs_root)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -45,7 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="zip-service",
-        version="1.0.0",
+        version=catalog.version,
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -65,6 +74,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"status": "shutting-down"}, status_code=503)
         return JSONResponse({"status": "ready"})
 
+    _register_docs(app, catalog)
+
     app.router.routes.insert(
         0,
         Route(
@@ -78,6 +89,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(Exception, _unhandled)
     app.add_middleware(RequestIdMiddleware)
     return app
+
+
+def _register_docs(app: FastAPI, catalog: Catalog) -> None:
+    """Register the manifest and each allow-listed document. No path parameters."""
+
+    @app.get("/docs/manifest.json", include_in_schema=False)
+    async def docs_manifest() -> JSONResponse:
+        return manifest_response(catalog)
+
+    for document in catalog.documents:
+        _register_document(app, document)
+
+
+def _register_document(app: FastAPI, document: Document) -> None:
+    async def serve() -> FileResponse:
+        return document_response(document)
+
+    serve.__name__ = "docs_" + document.slug
+    app.add_api_route(document.url_path, serve, methods=["GET"], include_in_schema=False)
 
 
 def _request_id(request: Request) -> str:
