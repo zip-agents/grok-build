@@ -19,3 +19,10 @@ htmlcov/
 Senior Backend Engineer — Take-Home Exercise.pdf
 PROMPT.md
 prompts/
+
+# Terraform local data. The deploy workflow supplies the remote backend.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json

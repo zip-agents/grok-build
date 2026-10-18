@@ -14,6 +14,7 @@ __pycache__
 htmlcov
 .env
 link-tmp
+.terraform
 dist
 *.egg-info
 *.pdf
