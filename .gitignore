@@ -14,3 +14,8 @@ dist/
 .coverage.*
 .coverage-data/
 htmlcov/
+
+# Exercise brief and working files. They stay on disk and are not published.
+Senior Backend Engineer — Take-Home Exercise.pdf
+PROMPT.md
+prompts/
