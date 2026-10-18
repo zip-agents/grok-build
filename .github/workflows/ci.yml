@@ -1,5 +1,5 @@
 # Both jobs run inside images built from this repo. See README.
-name: ci
+name: CI
 
 on:
   pull_request:
