@@ -27,7 +27,7 @@ locals {
 
 module "service" {
   # Pinned to a release of the platform repository; bump deliberately.
-  source = "git::https://github.com/zip-agents/zip-platform.git//terraform/modules/ecs-service?ref=v1.0.0"
+  source = "git::https://github.com/zip-agents/api-gateway.git//terraform/modules/ecs-service?ref=v1.0.0"
 
   name               = local.name
   image              = "${local.registry}/${local.repository}:${var.image_tag}"
