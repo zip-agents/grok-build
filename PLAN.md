@@ -142,3 +142,15 @@ Each commit leaves the fast tests green.
 ## If there is more time
 
 Property tests, a multipart fuzzer, HTTP/2, request metrics, a small ZIP writer that does not touch private `ZipFile` attributes, a measured chunk size, pinned action SHAs, `pip-audit`, a Kubernetes `preStop` example, and RFC 2231 continuations.
+
+## Later: publish and deploy
+
+Added when the repository was prepared for `github.com/zip-agents`. The service behaviour did not change. The exercise PDF is removed from the index and gitignored, with `PROMPT.md` and `prompts/`. History was not rewritten. The CI workflow is named `CI` so the deploy workflow's `workflow_run` trigger matches. `deploy/` and `.github/workflows/deploy.yml` are the platform's three files. The platform module `v1.0.0` was not reachable from here (`git` could not read GitHub credentials), so `terraform validate` did not run. `terraform fmt -check` and `actionlint` did.
+
+Platform checks against the existing runtime image, read-only, `--cap-drop ALL`, `PORT=8000`:
+
+- `GET /health/ready` and `GET /health/live` answer on port 8000. The platform command, run with `docker exec` as uid 10001, succeeded. `python` resolves to `/opt/venv/bin/python`.
+- `/proc/1/status` showed `CapEff` all zeros. The image user is `zip` (uid 10001).
+- The image was built with `GIT_SHA` set to the 40-character commit `7ac195f406536f7e4f85b7a2c55abb684a892894`. The manifest `revision` was that string.
+- PID 1's command line is `python -m zip_service`. `docker stop` ended with exit 0.
+- Default request ceiling is 532 MiB, inside the platform's 1 GiB task.

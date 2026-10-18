@@ -1,6 +1,6 @@
 # Agents and engineers
 
-This file is the working agreement for changes to zip-service. The contract in the task document (version 1.1.0, including the OpenAPI section) is the behavioural spec. The service version is 1.2.0. The README explains the choices made where that contract is silent. Do not edit the exercise PDF.
+This file is the working agreement for changes to zip-service. The contract in the task document (version 1.1.0, including the OpenAPI section) is the behavioural spec. The service version is 1.2.0. The README explains the choices made where that contract is silent. Do not edit the exercise PDF. It is gitignored, along with `PROMPT.md` and `prompts/`, and must stay out of the published tree.
 
 This is an HTTP API. There is no command-line tool and no installable library. The process entry is `python -m zip_service`.
 
@@ -28,6 +28,8 @@ Docker. Every `make` target below runs inside an image built from this repo. The
 
 `docker build .` (last stage `runtime`) is the image that serves traffic. It accepts an optional `GIT_SHA` build argument, and a build that omits the argument still succeeds. `docker build --target dev` is the image that lints and tests. Do not bake `.env` into either image. The runtime image copies `pyproject.toml`, `README.md`, and `AGENTS.md` so the docs endpoints can serve them.
 
+`.github/workflows/ci.yml` is the workflow named `CI`. `.github/workflows/deploy.yml` deploys only after that workflow succeeds on a push to `main`, or when someone runs it by hand. `deploy/` is the Terraform call into the shared platform module. Do not rename the CI workflow. The deploy trigger matches the name `CI`. A person sets `AWS_ACCOUNT_ID`, `AWS_REGION`, `DOMAIN_NAME`, the secret `SMOKE_API_KEY`, and the `prod` environment. Do not commit `.terraform/`, Terraform state, or tfvars.
+
 ## Architecture
 
 `zip_service/__main__.py` loads settings, installs `SIGTERM` and `SIGINT`, and runs uvicorn's `_serve` so uvicorn does not replace those handlers. It is not a CLI.
@@ -51,6 +53,9 @@ One request has three pieces:
 | `zip_service/api/` | Zip route, multipart parser, limits, problem JSON, OpenAPI operation |
 | `zip_service/archive/` | Archive names, `Content-Disposition`, streaming ZIP |
 | `zip_service/runtime/` | Output buffer, fixed byte caps, JSON logs |
+| `deploy/` | Terraform for this service on the shared platform |
+| `.github/workflows/ci.yml` | Workflow named `CI`: lint, tests, image smoke |
+| `.github/workflows/deploy.yml` | Plan on pull request, deploy after `CI` on `main` |
 
 `zip_service/archive/zipstream.py` is the only module that calls `zipfile`. On a failed stream it stops forwarding bytes before `ZipFile.close()`, so the end records are not sent to the client.
 
@@ -99,5 +104,6 @@ A change that only passes an in-process ASGI client is not done. The integration
 - Mark a test `slow` only when it moves tens of megabytes or waits on a real timeout. Idle timeouts in tests should be about 1 second.
 - `ZIP_SERVICE_TEST_HOOKS` is the only test seam. Do not add a backdoor that is on by default.
 - Commit in small steps that leave `make test-fast` green. Do not commit `.env`, virtualenvs, or the PDF modified.
-- The runtime image stays one process, uid 10001, and able to run with a read-only root filesystem. Dependencies live in `/opt/venv` so a bind-mount of the source does not hide them.
+- The runtime image stays one process, uid 10001, and able to run with a read-only root filesystem. `python` stays on `PATH` for the platform health check. Dependencies live in `/opt/venv` so a bind-mount of the source does not hide them. The entrypoint stays exec form so the process is PID 1.
+- The workflow in `.github/workflows/ci.yml` stays named `CI`. Deploy keys off that name.
 - `zip_service/__main__.py` is the process entry, not a command-line interface. Do not add a console script or a package named `http` (it would shadow the standard library when the repo root is on `sys.path`).

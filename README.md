@@ -135,7 +135,7 @@ docker network rm zip-service-smoke-net
 docker run --rm --read-only --publish 8000:8000 --env PORT=8000 zip-service:dev
 ```
 
-`docker stop` sends `SIGTERM`. An idle process exits as soon as in-flight work has drained, so the default 10 second stop timeout is enough when nothing is uploading. An orchestrator that may interrupt a live upload must set its stop grace **above** `SHUTDOWN_GRACE_SECONDS` (default 25). Otherwise it will `SIGKILL` the process before the grace period ends.
+`docker stop` sends `SIGTERM`. The image entrypoint is `python -m zip_service` in exec form, so that process is PID 1 and receives the signal itself. An idle process exits as soon as in-flight work has drained, so the default 10 second stop timeout is enough when nothing is uploading. An orchestrator that may interrupt a live upload must set its stop grace **above** `SHUTDOWN_GRACE_SECONDS` (default 25). Otherwise it will `SIGKILL` the process before the grace period ends. The shared platform allows 120 seconds and sets `SHUTDOWN_GRACE_SECONDS` to 100.
 
 The image is one process on purpose. Extra workers would each enforce `MAX_CONCURRENT_REQUESTS` separately.
 
@@ -177,7 +177,7 @@ Health `503` is `{"status": "shutting-down"}`. The zip `503` is a problem docume
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pull requests, on pushes to `main`, and on `workflow_dispatch`. A newer push cancels the previous run on the same ref. The workflow has `contents: read` only.
+`.github/workflows/ci.yml` is the workflow named `CI`. The deploy workflow starts only after a workflow with that exact name succeeds. It runs on pull requests, on pushes to `main`, and on `workflow_dispatch`. A newer push cancels the previous run on the same ref. The workflow has `contents: read` only.
 
 | Job | Purpose |
 |---|---|
@@ -185,6 +185,18 @@ Health `503` is `{"status": "shutting-down"}`. The zip `503` is a problem docume
 | `image` | `make image-smoke` with `GIT_SHA` set to the checked-out commit. Builds the runtime image and checks health, the docs manifest, `/docs/openapi.json`, and one archive through a second container. This is the image that serves traffic: non-root, read-only, no test tools. |
 
 The jobs run in parallel. A broken dev image does not hide a broken runtime image. `actions/checkout` is pinned to v7.0.1. The image installs uv 0.13.1, which is the version that produced `uv.lock`.
+
+## Deployment
+
+The service deploys itself onto a shared AWS platform. The platform repository owns the ECS cluster, the private network, Cloud Map, and the gateway in front of every zip service. This repository supplies the image and a Terraform module call in `deploy/`. The module is pinned to `v1.0.0` of that platform repository. The service is registered as `grok.zip.internal`, and only the gateway can reach it.
+
+A deploy starts when `CI` succeeds on a push to `main`, or when someone runs the deploy workflow by hand. A pull request that changes `deploy/` or the deploy workflow runs `terraform plan` only, with the read-only plan role, and writes the plan into the job summary.
+
+The deploy job checks out that commit, builds the image with `GIT_SHA` set to the 40-character commit, and pushes it to the ECR repository `zip-platform/grok`. An image tag that is already in ECR is reused. `terraform apply` then waits until the new tasks are healthy and rolls back if they never are. After apply, the job calls the gateway at `https://DOMAIN_NAME/grok`: readiness, one zip of two copies of the same file (the names come back de-duplicated), and `GET /docs/manifest.json`. The manifest `revision` must equal the commit that was built.
+
+The workflow needs repository variables `AWS_ACCOUNT_ID`, `AWS_REGION`, and `DOMAIN_NAME`, the secret `SMOKE_API_KEY`, and a GitHub environment named `prod`. A person sets those up. This repository cannot apply them, and it does not contain Terraform state or tfvars.
+
+The task is Fargate Spot, 0.25 vCPU, and 1 GiB, as described in the memory budget above. The root filesystem is read-only, capabilities are dropped, and the process runs as uid 10001. `python` is on `PATH`. The platform's health check, run as that user, is `GET /health/ready` on port 8000.
 
 ## Design
 
@@ -235,7 +247,9 @@ Per process, while every slot is busy:
 MAX_CONCURRENT_REQUESTS × (OUTPUT_BUFFER_MAX_BYTES + 655360)
 ```
 
-With the defaults that is `32 × (16777216 + 655360)` = 558 137 344 bytes, about 532 MiB. This is a ceiling on what the process retains, not a reservation. Kernel socket buffers sit on top of it. They are bounded by the operating system and do not grow with the upload.
+With the defaults that is `32 × (16777216 + 655360)` = 557 842 432 bytes, exactly 532 MiB. This is a ceiling on what the process retains, not a reservation. Kernel socket buffers sit on top of it. They are bounded by the operating system and do not grow with the upload.
+
+The shared platform runs the task with 0.25 vCPU and 1 GiB (1024 MiB). The 532 MiB request ceiling, the interpreter, and those kernel buffers fit in that 1 GiB. The task does not reserve the ceiling up front.
 
 A blocked socket write holds at most one extra 64 KiB slice, because the writer never pulls more than that out of the buffer at once.
 
